@@ -11,7 +11,7 @@ from scipy import ndimage
 from sofima import flow_field, flow_utils, map_utils, mesh, stitch_rigid
 from tqdm import tqdm
 
-from new_utils.io_utils import get_data_samples
+from .io_utils import get_data_samples
 
 
 def compute_mask(data, filter_size, range_limit):

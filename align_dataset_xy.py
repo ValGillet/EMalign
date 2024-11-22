@@ -18,10 +18,10 @@ import tensorstore as ts
 from concurrent import futures
 from tqdm import tqdm
 
-from new_utils.stacks_utils import Stack
-from new_utils.io_utils import *
-from new_utils.align_xy_utils import *
-from new_utils.check_utils import *
+from utils.stacks_utils import Stack
+from utils.io_utils import *
+from utils.align_xy_utils import *
+from utils.check_utils import *
 from align_stack_xy import align_stack_xy
 
 

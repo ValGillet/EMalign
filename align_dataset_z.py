@@ -13,8 +13,8 @@ import sys
 from tqdm import tqdm
 
 from align_stack_z import align_stack_z
-from new_utils.align_z_utils import compute_datasets_offsets
-from new_utils.io_utils import get_ordered_datasets
+from utils.align_z_utils import compute_datasets_offsets
+from utils.io_utils import get_ordered_datasets
 
 import subprocess
 

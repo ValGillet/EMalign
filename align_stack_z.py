@@ -15,7 +15,7 @@ from connectomics.common import bounding_box
 from tqdm import tqdm
 
 from sofima import warp
-from new_utils.align_z_utils import compute_flow_dataset, get_inv_map
+from utils.align_z_utils import compute_flow_dataset, get_inv_map
 
 logging.basicConfig(level=logging.INFO)
 logging.getLogger('absl').setLevel(logging.WARNING)
