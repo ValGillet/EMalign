@@ -12,9 +12,9 @@ import sys
 
 from tqdm import tqdm
 
-from align_stack_z import align_stack_z
-from utils.align_z_utils import compute_datasets_offsets
-from utils.io_utils import get_ordered_datasets
+from emalign.align_stack_z import align_stack_z
+from emalign.utils.align_z_utils import compute_datasets_offsets
+from emalign.utils.io_utils import get_ordered_datasets
 
 import subprocess
 
@@ -54,6 +54,10 @@ def align_dataset_z(config_path,
                                        step_slices,
                                        num_workers)
     
+    # Add some pad to account for errors
+    offsets = (offsets*1.05).astype(int)
+    
+    # Prepare the destination
     output_path = os.path.join(output_path, project_name)
     if not os.path.exists(output_path) or start_over:
         # Create container at destination if it doesn't exist or user wants to start over

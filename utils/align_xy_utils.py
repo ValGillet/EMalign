@@ -36,7 +36,7 @@ def estimate_offset_vert(top, bot, overlap):
     elif np.any(shape_diff < 0):
         top = np.pad(top, [(abs(shape_diff[0]), 0), (abs(shape_diff[1]), 0)])
     
-    xy_offset, _ = stitch_rigid._estimate_offset(top, bot, 0, filter_size=10)
+    xy_offset, _ = stitch_rigid._estimate_offset(top, bot, 0, filter_size=5)
     return xy_offset, top, bot
 
 
@@ -51,7 +51,7 @@ def estimate_offset_horiz(left, right, overlap):
     elif np.any(shape_diff < 0):
         left = np.pad(left, [(0, abs(shape_diff[0])), (0, abs(shape_diff[1]))])
     
-    xy_offset, _ = stitch_rigid._estimate_offset(left, right, 0, filter_size=10)
+    xy_offset, _ = stitch_rigid._estimate_offset(left, right, 0, filter_size=5)
     return xy_offset, left, right
 
 
@@ -88,7 +88,7 @@ def rescale_mesh(mesh, scale):
 
 def get_coarse_offset(tile_map, 
                       overlap=0.15,
-                      filter_size=10):
+                      filter_size=5):
     '''
     Compute coarse offset and mesh for initial rigid XY alignment
     '''

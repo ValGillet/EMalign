@@ -166,9 +166,9 @@ def get_data_samples(dataset, step_slices):
 
 ### WRITE 
 
-def render_slice_xy(dest, z, tm, m, stride, return_render=False):
+def render_slice_xy(dest, z, tm, m, stride, return_render=False, parallelism=1):
     try:
-        stitched, _ = warp.render_tiles(tm, m, parallelism=1, stride=(stride, stride))
+        stitched, _ = warp.render_tiles(tm, m, parallelism=parallelism, stride=(stride, stride))
         y,x = stitched.shape
         
         if np.any(dest.domain.exclusive_max[1:] < np.array([y, x])):

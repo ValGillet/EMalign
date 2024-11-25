@@ -22,43 +22,30 @@ def compute_mask(data, filter_size, range_limit):
 
 
 def estimate_rough_offset(img1, img2, scale=0.1, range_limit=1, filter_size=5): 
+    '''
+    Based on sofima.stitch_rigid._estimate_offset
+    '''
     img1_ds = resize(img1, None, fx=scale, fy=scale)
     img2_ds = resize(img2, None, fx=scale, fy=scale) 
+
+    mask_1 = (
+        ndimage.maximum_filter(img1_ds, filter_size)
+        - ndimage.minimum_filter(img1_ds, filter_size)
+    ) < range_limit
+    mask_2 = (
+        ndimage.maximum_filter(img2_ds, filter_size)
+        - ndimage.minimum_filter(img2_ds, filter_size)
+    ) < range_limit
+    mfc = flow_field.JAXMaskedXCorrWithStatsCalculator()
     
     # Compensate for difference in shape
-    shape_diff = np.array(img1_ds.shape) - np.array(img2_ds.shape)
-    if np.any(shape_diff > 0):
-        div, remainder = divmod(shape_diff, 2)
-        start_y, start_x = div[0], div[1]
-        end_y = -div[0]-remainder[0] if div[0] > 0 else None
-        end_x = -div[1]-remainder[1] if div[1] > 0 else None
-        
-        img1_ds = img1_ds[start_y:end_y, start_x:end_x]
+    patch_size = np.min([img1_ds.shape, img2_ds.shape], axis=0)
 
-        xy_offset, _ = stitch_rigid._estimate_offset(img1_ds, 
-                                                     img2_ds, 
-                                                     range_limit, 
-                                                     filter_size=filter_size)
-        xy_offset = (xy_offset + div[::-1])
-    elif np.any(shape_diff < 0):
-        div, remainder = divmod(abs(shape_diff), 2)
-        start_y, start_x = div[0], div[1]
-        end_y = -div[0]-remainder[0] if div[0] > 0 else None
-        end_x = -div[1]-remainder[1] if div[1] > 0 else None
-        img2_ds = img2_ds[start_y:end_y, start_x:end_x]
-        
-        xy_offset, _ = stitch_rigid._estimate_offset(img1_ds, 
-                                                     img2_ds, 
-                                                     range_limit, 
-                                                     filter_size=filter_size)
-        xy_offset = (xy_offset - div[::-1])
-    else:
-        xy_offset, _ = stitch_rigid._estimate_offset(img1_ds, 
-                                                     img2_ds, 
-                                                     range_limit, 
-                                                     filter_size=filter_size)
+    xo, yo, _, _ = mfc.flow_field(
+        img1_ds, img2_ds, pre_mask=mask_1, post_mask=mask_2, patch_size=tuple(patch_size.tolist()), step=(1, 1)
+    ).squeeze()
 
-    return np.array(xy_offset)[::-1]/scale
+    return np.array([yo, xo])/scale
 
 
 def compute_datasets_offsets(datasets, 
@@ -153,43 +140,32 @@ def _compute_flow(dataset,
         
         fs = fs[::-1]
         for z in tqdm(range(start, dataset.shape[0]),
+                      position=0,
                       desc=f'{dataset_name}: Computing flow (scale={scale})'):
             curr = fs.pop().result()
 
             if not curr.any():
                 # If empty slice, compare to the next one
                 continue
-            
-            if curr.shape != prev.shape:
-                y,x=curr.shape
-                prev = prev[:y, :x]
-                pre_mask = pre_mask[:y, :x]
 
             try:
-                if z == start:
+                if z == 0:
+                    # First slice comes from a different dataset which may have black tiles
+                    # We use masks to ensure that only regions with data are used to compute the match
                     post_mask = compute_mask(curr, filter_size, range_limit)
 
-                    # The batch size is a parameter which impacts the efficiency of the computation (but
-                    # not its result). It has to be large enough for the computation to fully utilize the
-                    # available GPU capacity, but small enough so that the batch fits in GPU RAM.
                     flow = mfc.flow_field(prev, curr, (patch_size, patch_size),
                                                 (stride, stride), batch_size=512,
                                                 pre_mask=pre_mask, post_mask=post_mask)
                 else:
-                    # The batch size is a parameter which impacts the efficiency of the computation (but
-                    # not its result). It has to be large enough for the computation to fully utilize the
-                    # available GPU capacity, but small enough so that the batch fits in GPU RAM.
+                    # We could use masks here too, but slices within a dataset match fairly well already and computing masks takes time
                     flow = mfc.flow_field(prev, curr, (patch_size, patch_size),
                                           (stride, stride), batch_size=512)
-
-                #jax.clear_caches()
                 flows.append(flow)
 
                 prev = curr
-                #pre_mask = post_mask
             except Exception as e:
                 raise RuntimeError(e)
-    
     jax.clear_caches()
     return np.transpose(np.array(flows), [1, 0, 2, 3]) # [channels, z, y, x]
 

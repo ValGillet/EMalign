@@ -1,0 +1,9 @@
+Metadata-Version: 2.1
+Name: emalign
+Version: 0.1
+Summary: Align image tiles acquired with SBEM into an image stack. Using SOFIMA (by Google)
+Author: Valentin Gillet
+Author-email: valentin.gillet@biol.lu.se
+Keywords: python,alignment
+Requires-Dist: numpy
+Requires-Dist: tensorstore
