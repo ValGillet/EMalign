@@ -34,9 +34,6 @@ def align_stack_z(destination_path,
                   first_slice,
                   num_threads):
     
-    logging.info(f'patch_size = {patch_size}')
-    logging.info(f'stride = {stride}')
-    
     offset = np.array(offset)
     
     # Open input dataset
@@ -47,7 +44,7 @@ def align_stack_z(destination_path,
                                   }
                       },
                       dtype=ts.uint8
-                      ).result()
+                      ).result()[:50]
     dataset_name = dataset_path.split('/')[-2]
 
     # Open destination
@@ -181,5 +178,9 @@ if __name__ == '__main__':
     config_file = sys.argv[1]
     with open(config_file, 'r') as f:
         config = json.load(f)
+
+        
+    logging.info(f'patch_size = {config['patch_size']}')
+    logging.info(f'stride = {config['stride']}')
 
     align_stack_z(**config)

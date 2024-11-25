@@ -14,10 +14,10 @@ import logging
 import numpy as np
 import sys
 
-from new_utils.stacks_utils import Stack
-from new_utils.io_utils import *
-from new_utils.align_xy_utils import *
-from new_utils.check_utils import *
+from emalign.utils.stacks_utils import Stack
+from emalign.utils.io_utils import *
+from emalign.utils.align_xy_utils import *
+from emalign.utils.check_utils import *
 
 
 logging.basicConfig(level=logging.INFO)
@@ -72,6 +72,7 @@ def prep_align_stacks(main_dir,
         for z in stack.slices:
             slice_to_paths[z].update({stack.stack_name: stack})
     stack_pairs = np.unique([list(z.keys()) for z in slice_to_paths.values() if len(z) > 1], axis=0)       
+    print(slice_to_paths)
 
     logging.info(f'Found stack pairs: {stack_pairs}')
     # Overlapping stacks were found, figure out overlapping regions
@@ -160,12 +161,12 @@ if __name__ == '__main__':
                               This directory contains subdirectories themselves containing the tiles to align. \n \
                               Subdirectories are expected to contain tif and info files.')
     parser.add_argument('-o', '--output_zarr',
-                        metavar='OUT_DIR',
+                        metavar='OUT_ZARR',
                         dest='output_path',
                         required=True,
                         type=str,
-                        help='Path the zarr container where to write stitched tifs.')
-    parser.add_argument('-cf', '--config_dir',
+                        help='Path to the zarr container where to write stitched tifs.')
+    parser.add_argument('-cfg', '--config_dir',
                         metavar='OUT_DIR',
                         dest='config_dir',
                         required=True,
@@ -186,13 +187,13 @@ if __name__ == '__main__':
                         type=int,
                         nargs=3,
                         default=[0,0,0],
-                        help='ZYX pixel offset for the final volume.')
+                        help='ZYX pixel offset for the final volume. Default: [0,0,0]')
     parser.add_argument('--overlap',
                         metavar='OVERLAP',
                         dest='overlap',
                         type=int,
                         default=500,
-                        help='Size of the overlapping region in pixels. Default: 500')
+                        help='Size of the overlapping region in pixels, or in size ratio. Default: 500')
     parser.add_argument('-c', '--cores',
                         metavar='CORES',
                         dest='num_workers',
@@ -217,19 +218,19 @@ if __name__ == '__main__':
                         dest='apply_gaussian',
                         action='store_false',
                         default=True,
-                        help='Whether to apply a gaussian filter to images before alignment.') 
+                        help='Don\'t apply a gaussian filter to images before alignment.') 
     parser.add_argument('--not-apply_clahe',
                         dest='apply_clahe',
                         action='store_false',
                         default=True,
-                        help='Whether to apply CLAHE to images before alignment.') 
+                        help='Don\'t apply CLAHE to images before alignment.') 
     parser.add_argument('-p', '--dir_pattern',
                         metavar='DIR_PATTERN',
                         dest='dir_pattern',
                         nargs=1,
                         default=[''],
                         type=str,
-                        help='Pattern to match for subdirectories to process.')
+                        help='Pattern to match for subdirectories to process. Default to no pattern')
     parser.add_argument('--port',
                         metavar='PORT',
                         dest='port',

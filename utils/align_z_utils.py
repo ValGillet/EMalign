@@ -192,13 +192,13 @@ def compute_flow_dataset(dataset,
     flow = flow_utils.clean_flow(flow, 
                                  min_peak_ratio=1.6, 
                                  min_peak_sharpness=1.6, 
-                                 max_magnitude=80, 
-                                 max_deviation=20)
+                                 max_magnitude=0, 
+                                 max_deviation=0)
     ds_flow = flow_utils.clean_flow(ds_flow, 
                                     min_peak_ratio=1.6, 
                                     min_peak_sharpness=1.6, 
-                                    max_magnitude=80, 
-                                    max_deviation=20)
+                                    max_magnitude=0, 
+                                    max_deviation=0)
     
     ds_flow_hires = np.zeros_like(flow)
 
@@ -216,7 +216,7 @@ def compute_flow_dataset(dataset,
         ds_flow_hires[:, z:z + 1, ...] = resampled / scale
 
     return flow_utils.reconcile_flows((flow, ds_flow_hires), 
-                                      max_gradient=0, max_deviation=20, min_patch_size=400)
+                                      max_gradient=0, max_deviation=0, min_patch_size=400)
 
 
 def get_inv_map(flow, stride, dataset_name):
