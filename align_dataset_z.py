@@ -16,8 +16,6 @@ from emalign.align_stack_z import align_stack_z
 from emalign.utils.align_z_utils import compute_datasets_offsets
 from emalign.utils.io_utils import get_ordered_datasets
 
-import subprocess
-
 logging.basicConfig(level=logging.INFO)
 logging.getLogger('absl').setLevel(logging.WARNING)
 logging.getLogger('jax._src.xla_bridge').setLevel(logging.WARNING)
@@ -54,13 +52,10 @@ def align_dataset_z(config_path,
                                        step_slices,
                                        num_workers)
     
-    # Add some pad to account for errors
-    offsets = (offsets*1.05).astype(int)
-    
     # Prepare the destination
     output_path = os.path.join(output_path, project_name)
     if not os.path.exists(output_path) or start_over:
-        # Create container at destination if it doesn't exist or user wants to start over
+        # Create container at destination if it doesn't exist or if user wants to start over
         # Shape destination starts as largest yx and last offset + shape of last dataset
         # yx could change shape based on warping but z should stay like this for this project
         shapes = np.array([dataset.shape for dataset in datasets])
@@ -80,9 +75,18 @@ def align_dataset_z(config_path,
                                create=True,
                                delete_existing=True
                                ).result()
+    else:
+        destination = ts.open({'driver': 'zarr',
+                            'kvstore': {
+                                    'driver': 'file',
+                                    'path': output_path,
+                                        }
+                            },
+                            dtype=ts.uint8
+                            ).result()
 
     # For the first dataset, there is no first reference slice
-    script_path = os.path.abspath('/mnt/hdd1/SRC/alignment_sofima/new_scripts/align_stack_z.py')
+    # script_path = os.path.abspath('/mnt/hdd1/SRC/alignment_sofima/new_scripts/align_stack_z.py')
     first_slice = None                
     for offset, dataset in tqdm(zip(offsets, datasets), 
                                 total=len(datasets),
@@ -99,25 +103,42 @@ def align_dataset_z(config_path,
                   'first_slice': first_slice,
                   'num_threads': num_workers}
         
-        config_file = os.path.abspath(f'/mnt/hdd1/SRC/alignment_sofima/new_scripts/tmp_config_{dataset.kvstore.path.split('/')[-2]}.json')
-        with open(config_file, 'w') as f:
-            json.dump(config, f)
+        dataset_name = dataset.kvstore.path.split('/')[-2]
+        output_dir = destination.kvstore.path.rsplit('/', maxsplit=3)[0]
         
-        command = f'python {script_path} {config_file}'
-        p = subprocess.Popen(command.split(' '), 
-                             env=os.environ, 
-                             stdout=subprocess.PIPE)
-        for line in iter(p.stdout.readline, b''):
-            print(line)
-        p.stdout.close()
-        p.wait()
-        p.communicate()  
-        p.terminate()  
+        config_file = os.path.abspath(os.path.join(output_dir, dataset_name + '.json'))
+        with open(config_file, 'w') as f:
+            json.dump(config, f, indent='')
+        
+        # command = f'python {script_path} {config_file}'
+        # p = subprocess.Popen(command.split(' '), 
+        #                      env=os.environ, 
+        #                      stdout=subprocess.PIPE)
+        # for line in iter(p.stdout.readline, b''):
+        #     print(line)
+        # p.stdout.close()
+        # p.wait()
+        # p.communicate()  
+        # p.terminate()  
 
-        if p.poll() is None:
-            logging.info('Process did not terminate properly.')
-        else:
-            logging.info('Process terminated successfully.')
+        # if p.poll() is None:
+        #     logging.info('Process did not terminate properly.')
+        # else:
+        #     logging.info('Process terminated successfully.')
+        try:
+            align_stack_z(destination.kvstore.path,
+                          dataset.kvstore.path, 
+                          offset, 
+                          scale_flow, 
+                          patch_size, 
+                          stride, 
+                          filter_size,
+                          range_limit,
+                          first_slice,
+                          num_workers,
+                          start_over)
+        except Exception as e:
+            raise RuntimeError(e)
         
         # Set the last slice of this dataset to be the reference for the next dataset
         first_slice = int(offset[0] + dataset.shape[0] - 1)

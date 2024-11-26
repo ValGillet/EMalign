@@ -21,6 +21,15 @@ def compute_mask(data, filter_size, range_limit):
     return mask
 
 
+def pad_to_shape(array, target_shape):
+    assert array.ndim == len(target_shape)
+
+    # Cannot pad with negative values
+    end_pad = np.max([[0,0], target_shape-np.array(array.shape)], axis=0)
+    pad = np.stack([(0,0), end_pad]).T
+    return np.pad(array, pad)
+
+
 def estimate_rough_offset(img1, img2, scale=0.1, range_limit=1, filter_size=5): 
     '''
     Based on sofima.stitch_rigid._estimate_offset
@@ -28,21 +37,21 @@ def estimate_rough_offset(img1, img2, scale=0.1, range_limit=1, filter_size=5):
     img1_ds = resize(img1, None, fx=scale, fy=scale)
     img2_ds = resize(img2, None, fx=scale, fy=scale) 
 
-    mask_1 = (
-        ndimage.maximum_filter(img1_ds, filter_size)
-        - ndimage.minimum_filter(img1_ds, filter_size)
-    ) < range_limit
-    mask_2 = (
-        ndimage.maximum_filter(img2_ds, filter_size)
-        - ndimage.minimum_filter(img2_ds, filter_size)
-    ) < range_limit
-    mfc = flow_field.JAXMaskedXCorrWithStatsCalculator()
-    
-    # Compensate for difference in shape
-    patch_size = np.min([img1_ds.shape, img2_ds.shape], axis=0)
+    mask_1 = compute_mask(img1_ds, filter_size, range_limit)
+    mask_2 = compute_mask(img2_ds, filter_size, range_limit)
 
+    # Pad to the same shape to avoid errors with flow computation
+    # Pad after computing the masks to save time
+    target_shape = np.max([img1_ds.shape, img2_ds.shape], axis=0)
+
+    img1_ds = pad_to_shape(img1_ds, target_shape)
+    img2_ds = pad_to_shape(img2_ds, target_shape)
+    mask_1 = pad_to_shape(mask_1, target_shape)
+    mask_2 = pad_to_shape(mask_2, target_shape)
+
+    mfc = flow_field.JAXMaskedXCorrWithStatsCalculator()
     xo, yo, _, _ = mfc.flow_field(
-        img1_ds, img2_ds, pre_mask=mask_1, post_mask=mask_2, patch_size=tuple(patch_size.tolist()), step=(1, 1)
+        img1_ds, img2_ds, pre_mask=mask_1, post_mask=mask_2, patch_size=img1_ds.shape, step=(1, 1)
     ).squeeze()
 
     return np.array([yo, xo])/scale
@@ -56,7 +65,6 @@ def compute_datasets_offsets(datasets,
                              step_slices,
                              num_workers):
     
-    logging.info(f'')
     offsets_yx = [[0,0]]
     fs = []
     with futures.ThreadPoolExecutor(num_workers) as tpe:
@@ -74,6 +82,7 @@ def compute_datasets_offsets(datasets,
 
         for _ in tqdm(range(len(fs)),
                       desc=f'Calculating offset between {len(datasets)} datasets.'):
+            # Reference is the latest image before the current dataset
             prev = data[-1]
             data = fs.pop().result()
 
@@ -128,7 +137,7 @@ def _compute_flow(dataset,
         start = 0
         prev = resize(first_slice, None, fx=scale, fy=scale) if scale<1 else first_slice
     
-    pre_mask = compute_mask(prev, filter_size, range_limit)
+    prev_mask = compute_mask(prev, filter_size, range_limit)
 
     flows = []
     fs = []
@@ -150,13 +159,28 @@ def _compute_flow(dataset,
 
             try:
                 if z == 0:
+                    # Different shapes may cause issues so we need to bring prev to the right shape without losing info
+                    # Note that we don't want to change the shape of curr if we can avoid it because then we'd have to keep track for 
+                    # the whole pipeline since the flow shape will have changed too.
+                    if np.any(np.array(curr.shape) > np.array(prev.shape)):
+                        # If prev is smaller, we pad to shape with zeros to the end of the data
+                        # It doesn't affect offset
+                        prev = pad_to_shape(prev, curr.shape)
+                        pre_mask = pad_to_shape(pre_mask, curr.shape)
+                    if np.any(np.array(prev.shape) > np.array(curr.shape)):
+                        # If prev is larger, we crop to shape
+                        # Prev and curr should be roughly overlapping, so we should not be losing relevant info
+                        y,x = curr.shape
+                        prev = prev[:y, :x]
+                        prev_mask = prev_mask[:y, :x]
+
                     # First slice comes from a different dataset which may have black tiles
                     # We use masks to ensure that only regions with data are used to compute the match
-                    post_mask = compute_mask(curr, filter_size, range_limit)
+                    curr_mask = compute_mask(curr, filter_size, range_limit)
 
                     flow = mfc.flow_field(prev, curr, (patch_size, patch_size),
-                                                (stride, stride), batch_size=512,
-                                                pre_mask=pre_mask, post_mask=post_mask)
+                                          (stride, stride), batch_size=512,
+                                          pre_mask=prev_mask, post_mask=curr_mask)
                 else:
                     # We could use masks here too, but slices within a dataset match fairly well already and computing masks takes time
                     flow = mfc.flow_field(prev, curr, (patch_size, patch_size),

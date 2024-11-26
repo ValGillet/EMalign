@@ -161,7 +161,7 @@ def get_data_samples(dataset, step_slices):
             arr = dataset[z].read().result()
         data.append(arr)
 
-    return np.stack(data)
+    return np.array(data)
 
 
 ### WRITE 
