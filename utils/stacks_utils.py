@@ -70,6 +70,9 @@ class Stack:
         for z, d in self.slice_to_tilemap.items():
             self.slice_to_paths[z].append(list(d.values()))
 
+        tile_indices = list(d.keys())
+        self.tile_maps_invert = dict(zip(tile_indices, [None]*len(tile_indices)))
+
 
 # COMBINE STACKS
 def get_tile_maps_offset(tile_map_1, tile_map_2, overlap):
@@ -155,9 +158,7 @@ def combine_stacks(pair, overlap):
     pair_names = [s.stack_name for s in pair]
 
     # Get first common Z slice
-    for z in stack_1.slices:
-        if z in stack_2.slices:
-            break
+    z = list(set(stack_1.slices).intersection(stack_2.slices))[0]
     
     z, tile_map_1, _ = load_tilemap({z: stack_1.slice_to_tilemap[z]}, stack_1.tile_maps_invert, True, True, 1)
     z, tile_map_2, _ = load_tilemap({z: stack_2.slice_to_tilemap[z]}, stack_2.tile_maps_invert, True, True, 1)

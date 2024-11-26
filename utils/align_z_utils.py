@@ -166,7 +166,7 @@ def _compute_flow(dataset,
                         # If prev is smaller, we pad to shape with zeros to the end of the data
                         # It doesn't affect offset
                         prev = pad_to_shape(prev, curr.shape)
-                        pre_mask = pad_to_shape(pre_mask, curr.shape)
+                        prev_mask = pad_to_shape(prev_mask, curr.shape)
                     if np.any(np.array(prev.shape) > np.array(curr.shape)):
                         # If prev is larger, we crop to shape
                         # Prev and curr should be roughly overlapping, so we should not be losing relevant info

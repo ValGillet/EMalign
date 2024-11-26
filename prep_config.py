@@ -12,6 +12,7 @@ import argparse
 import json
 import logging
 import numpy as np
+import pandas as pd
 import sys
 
 from emalign.utils.stacks_utils import Stack
@@ -23,6 +24,76 @@ from emalign.utils.check_utils import *
 logging.basicConfig(level=logging.INFO)
 logging.getLogger('absl').setLevel(logging.WARNING)
 logging.getLogger('jax._src.xla_bridge').setLevel(logging.WARNING)
+
+
+def get_stacks(stack_paths, invert_instructions):
+
+    # Load stacks
+    stacks = []
+    for stack_path in stack_paths:
+        stack = Stack(stack_path)
+        stack._get_tilemaps_paths()
+        for k in stack.tile_maps_invert.keys():
+            stack.tile_maps_invert[k]=invert_instructions[stack.stack_name]
+        stacks.append(stack) 
+
+    # Split stacks if there are overlaps
+    unique_slices = sorted(np.unique(np.concatenate([stack.slices for stack in stacks])).tolist())
+    df = pd.DataFrame({'z': unique_slices, 
+                    'stack_name': [[] for _ in range(len(unique_slices))], 
+                    'tile_paths':[[] for _ in range(len(unique_slices))]
+                    })
+
+    for stack in stacks:
+        for z in stack.slices:
+            # Join existing name and this stack at that slice
+            df.loc[df.z == z, ['stack_name']] += [[stack.stack_name]]
+
+            # Concatenate tile paths
+            df.loc[df.z == z, ['tile_paths']] += [[stack.slice_to_tilemap[z]]]
+
+    df['group'] = df['stack_name'].ne(df['stack_name'].shift()).cumsum()
+
+    new_stacks = {}
+    for group, group_df in df.groupby('group'):    
+        stack_name = group_df.stack_name.iloc[0]
+
+        if len(stack_name) == 1:
+            # Stack name becomes name + group (gives an idea of order too)
+            new_stack_name = str(group).zfill(2) + '_' + stack_name[0]
+
+            tile_map = {}
+            for z in group_df.z:
+                tile_map[z] = group_df.loc[group_df.z == z, 'tile_paths'].item()[0]
+            
+            stack = Stack()
+            stack.stack_name = new_stack_name
+            stack._set_tilemaps_paths(tile_map)
+            stack.tile_maps_invert = {k: invert_instructions[stack_name[0]] for k in tile_map[z].keys()}
+
+            new_stacks[new_stack_name] = stack
+        
+        elif len(stack_name) == 2:
+            combined_stack_name = '_'.join([str(group).zfill(2)] + stack_name)
+            pair = []
+            for i in range(2):
+                new_stack_name = str(group).zfill(2) + '_' + stack_name[i]
+                
+                tile_map = {}
+                for z in group_df.z:
+                    tile_map[z] = group_df.loc[group_df.z == z, 'tile_paths'].item()[i]
+
+                stack = Stack()
+                stack.stack_name = new_stack_name
+                stack._set_tilemaps_paths(tile_map)
+                stack.tile_maps_invert = {k: invert_instructions[stack_name[i]] for k in tile_map[z].keys()}
+
+                pair.append(stack)
+            new_stacks[combined_stack_name] = pair
+        elif len(stack_name) > 2:
+            raise RuntimeError('Dealing with more than 2 stacks overlapping has not been implemented yet')
+        
+    return new_stacks
 
 
 def prep_align_stacks(main_dir,
@@ -56,42 +127,32 @@ def prep_align_stacks(main_dir,
 
     # Invert stack?
     logging.info('Please check whether to invert stacks')
-    invert_instructions = check_stacks_to_invert(stack_paths, resolution, num_workers, port=port)      
+    invert_instructions = check_stacks_to_invert(stack_paths, resolution, num_workers, port=port)
 
-    stacks = []
-    for stack_path in stack_paths:
-        stack = Stack(stack_path)
-        stack._get_tilemaps_paths()
-        for k in stack.tile_maps_invert.keys():
-            stack.tile_maps_invert[k]=invert_instructions[stack.stack_name]
-        stacks.append(stack)    
+    stacks = get_stacks(stack_paths, invert_instructions)
 
     # Look for overlapping stacks
-    slice_to_paths = defaultdict(dict)
-    for stack in stacks:
-        for z in stack.slices:
-            slice_to_paths[z].update({stack.stack_name: stack})
-    stack_pairs = np.unique([list(z.keys()) for z in slice_to_paths.values() if len(z) > 1], axis=0)       
-    print(slice_to_paths)
+    stack_pairs = {k:v for k,v in stacks.items() if isinstance(v, list)}
+    stacks = [v for k,v in stacks.items() if not isinstance(v, list)]
 
-    logging.info(f'Found stack pairs: {stack_pairs}')
-    # Overlapping stacks were found, figure out overlapping regions
+    logging.info(f'Found {len(stack_pairs)} stack pairs')
     combined_stacks = []
-    for pair in stack_pairs:
-        stack_1, stack_2 = [stack for stack in stacks if stack.stack_name in pair]
-        # Detect overlapping regions
-        combined_stack = check_combined_stacks(stack_1, 
-                                               stack_2, 
-                                               overlap, 
-                                               apply_gaussian, 
-                                               apply_clahe, 
-                                               scale,
-                                               resolution,
-                                               port)
-        
-        combined_stacks.append(combined_stack)
-
-    stacks = [s for s in stacks if s.stack_name not in stack_pairs]
+    if len(stack_pairs) > 0:
+        logging.info('Checking pairs of overlapping stacks')
+        # Overlapping stacks were found, figure out overlapping regions
+        for name_combined_stack, pair in stack_pairs.items():
+            stack_1, stack_2 = pair
+            # Detect overlapping regions
+            combined_stack = check_combined_stacks(stack_1, 
+                                                   stack_2, 
+                                                   overlap, 
+                                                   apply_gaussian, 
+                                                   apply_clahe, 
+                                                   scale,
+                                                   resolution,
+                                                   port)
+            combined_stack.stack_name = name_combined_stack
+            combined_stacks.append(combined_stack)
 
     logging.info('Writing stack configs')
     config_paths = {}

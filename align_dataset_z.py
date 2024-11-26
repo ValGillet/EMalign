@@ -3,6 +3,10 @@ import os
 os.environ['XLA_PYTHON_CLIENT_PREALLOCATE'] = 'false'
 # os.environ['XLA_PYTHON_CLIENT_ALLOCATOR'] = 'cuda_async'
 
+# Influences performance
+os.environ['OMP_NUM_THREADS'] = '4'
+os.environ['MKL_NUM_THREADS'] = '4'
+
 import argparse
 import json
 import logging

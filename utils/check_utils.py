@@ -12,7 +12,7 @@ from .stacks_utils import *
 def assemble_tile_map(tile_map):
 
     max_shape = np.max([t.shape for t in tile_map.values()], axis=0)
-    max_coords = np.max([c for c in tile_map.keys()], axis=0)
+    max_coords = np.max([c for c in tile_map.keys()], axis=0)[::-1]
     
     test_combined = np.zeros((max_coords+1)*max_shape) 
     
@@ -130,8 +130,11 @@ def check_combined_stacks(stack_1,
 
         new_tile_map = defaultdict(dict)
         for z, tile_map in combined_stack.slice_to_tilemap.items():
-            new_tile_map.update({z: {new_keys[k]: tm for k,tm in tile_map.items()}}) 
+            new_tile_map.update({z: {new_keys[k]: tm for k,tm in tile_map.items()}})
+        
+        new_tile_map_invert = {new_keys[k]: combined_stack.tile_maps_invert[k] for k in tile_map.keys()}
         combined_stack._set_tilemaps_paths(new_tile_map)
+        combined_stack.tile_maps_invert = new_tile_map_invert
         print('Check new solution: ')
     
     return combined_stack
