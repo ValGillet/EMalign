@@ -51,7 +51,6 @@ def align_stack_z(destination_path,
                       },
                       dtype=ts.uint8
                       ).result()
-    dataset = dataset[:10]
     
     # Check the attributes file for a variable that would show that this stack was processed
     attrs = get_dataset_attributes(dataset)

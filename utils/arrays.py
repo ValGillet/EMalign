@@ -17,4 +17,3 @@ def pad_to_shape(array, target_shape):
     end_pad = np.max([[0,0], target_shape-np.array(array.shape)], axis=0)
     pad = np.stack([(0,0), end_pad]).T
     return np.pad(array, pad)
-

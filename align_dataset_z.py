@@ -47,9 +47,9 @@ def align_dataset_z(config_paths,
         if output_path is not None:
             assert output_path == main_config['output_path'], 'Output paths between config files are not matching'
         else:
-            output_path     = main_config['output_path']
+            output_path = main_config['output_path']
 
-        stack_configs   = stack_configs | main_config['stack_configs']
+        stack_configs = stack_configs | main_config['stack_configs']
 
     with open(config_z_path, 'r') as f:
         config_z = json.load(f)
