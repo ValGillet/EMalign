@@ -15,10 +15,10 @@ import numpy as np
 import pandas as pd
 import sys
 
-from emalign.utils.stacks_utils import Stack
-from emalign.utils.io_utils import *
-from emalign.utils.align_xy_utils import *
-from emalign.utils.check_utils import *
+from emalign.utils.stacks import Stack
+from emalign.utils.io import *
+from emalign.utils.align_xy import *
+from emalign.utils.inspect import *
 
 
 logging.basicConfig(level=logging.INFO)
@@ -97,7 +97,7 @@ def get_stacks(stack_paths, invert_instructions):
 
 
 def prep_align_stacks(main_dir,
-                      config_dir,
+                      project_dir,
                       output_path,
                       dir_pattern,
                       resolution,
@@ -110,14 +110,15 @@ def prep_align_stacks(main_dir,
                       num_workers,
                       port):
     
-    logging.info(f'Configs will be stored at: {config_dir}')
+    config_dir = os.path.join(project_dir, 'config')
     os.makedirs(config_dir, exist_ok=True)
+    logging.info(f'Configs will be stored at: {project_dir}')
 
     if os.path.exists(os.path.join(config_dir, 'main_config.json')):
         logging.info('Config already exists in dir, exiting process...')
         sys.exit()
 
-    # Find tilesets with wanted resolution
+    # Find tilesets with desired resolution
     logging.info(f'Looking for tilesets in: {main_dir}')
     stack_paths = get_tilesets(main_dir, resolution, dir_pattern, num_workers)
 
@@ -184,13 +185,16 @@ def prep_align_stacks(main_dir,
                         'tile_maps': json_tile_maps,
                         'tile_maps_invert': {str(k):v for k,v in stack.tile_maps_invert.items()},
                         }
-        config_path = os.path.join(config_dir, stack.stack_name + '.json')
+        config_path = os.path.join(config_dir, 'xy_' + stack.stack_name + '.json')
         config_paths.update({stack.stack_name: os.path.abspath(config_path)})
             
         with open(config_path, 'w') as f:
             json.dump(config_stack, f, indent='')
 
+    project_name = input('Please name the project: ')
+
     main_config = {
+                'project_name': project_name,
                 'main_dir': os.path.abspath(main_dir),
                 'stack_configs': config_paths,
                 'tilesets_combined': len(stack_pairs),

@@ -4,13 +4,16 @@ import numpy as np
 from glob import glob
 from collections import defaultdict
 
-from .align_xy_utils import estimate_offset_horiz, estimate_offset_vert, test_laplacian
-from .io_utils import *
+from .align_xy import estimate_offset_horiz, estimate_offset_vert, test_laplacian
+from .io import *
 
 
 class Stack:
     def __init__(self, stack_path=None, stack_name=None, tile_maps_paths=None, tile_maps_invert=None):
-        self.stack_path = stack_path
+        if stack_path is not None:
+            self.stack_path = os.path.abspath(stack_path)
+        else:
+            self.stack_path = None
         
         if stack_path is not None and stack_name is None:
             self.stack_name = stack_path.split('/')[-2]
@@ -36,7 +39,7 @@ class Stack:
 
     def _get_tilemaps_paths(self):
         # Produces lists of paths of all tifs contained in self.stack_path
-        tile_paths = glob(self.stack_path + '*.tif')
+        tile_paths = glob(os.path.join(self.stack_path, '*.tif'))
 
         # Get paths and group by slice
         self.slice_to_paths = defaultdict(list)

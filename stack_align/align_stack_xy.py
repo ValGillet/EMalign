@@ -2,6 +2,9 @@ import os
 # To prevent running out of memory because of preallocation
 os.environ['XLA_PYTHON_CLIENT_PREALLOCATE'] = 'false'
 
+os.environ['OMP_NUM_THREADS'] = '4'
+os.environ['MKL_NUM_THREADS'] = '4'
+
 import warnings
 # Prevent printing the following warning, which does not seem to be an issue for the code to run properly:
 #     /home/autoseg/anaconda3/envs/alignment/lib/python3.12/multiprocessing/popen_fork.py:66: RuntimeWarning: os.fork() was called. 
@@ -16,10 +19,10 @@ import tensorstore as ts
 from concurrent import futures
 from tqdm import tqdm
 
-from emalign.utils.stacks_utils import Stack
-from emalign.utils.io_utils import *
-from emalign.utils.align_xy_utils import *
-from emalign.utils.check_utils import *
+from ..utils.stacks import Stack
+from ..utils.io import *
+from ..utils.align_xy import *
+from ..utils.inspect import *
 
 
 logging.basicConfig(level=logging.INFO)
@@ -91,25 +94,28 @@ def align_stack_xy(output_path,
             cx, cy, coarse_mesh = get_coarse_offset(tile_map, 
                                                     overlap=overlap)
 
-        if np.isinf(np.concatenate([cx,cy])).any():
-            # If scale doesn't work, coarse offset vectors are infinite. 
-            # Using non-downsampled images may solve it.
-            # logging.info(f'Using scale=1 for stack: {stack.stack_name}')
-            scale = 1
+        try:
+            if np.isinf(np.concatenate([cx,cy])).any():
+                # If scale doesn't work, coarse offset vectors are infinite. 
+                # Using non-downsampled images may solve it.
+                # logging.info(f'Using scale=1 for stack: {stack.stack_name}')
+                scale = 1
 
-            cx, cy, coarse_mesh = get_coarse_offset(tile_map, 
-                                                    overlap=overlap)
-            
-            meshes = get_elastic_mesh(tile_map, 
-                                        cx, 
-                                        cy, 
-                                        coarse_mesh)
-        else:
-            meshes = get_elastic_mesh(tile_map_ds, 
-                                        cx, 
-                                        cy, 
-                                        coarse_mesh)
-            meshes = {k:rescale_mesh(v, int(1/scale)) for k,v in meshes.items()}
+                cx, cy, coarse_mesh = get_coarse_offset(tile_map, 
+                                                        overlap=overlap)
+                
+                meshes = get_elastic_mesh(tile_map, 
+                                            cx, 
+                                            cy, 
+                                            coarse_mesh)
+            else:
+                meshes = get_elastic_mesh(tile_map_ds, 
+                                            cx, 
+                                            cy, 
+                                            coarse_mesh)
+                meshes = {k:rescale_mesh(v, int(1/scale)) for k,v in meshes.items()}
+        except Exception as e:
+            raise RuntimeError(e)
         # Queue the warping task and move on to the next slices
         fs_warp.append(tpe.submit(render_slice_xy, dataset, z-z_offset, tile_map, meshes, stride))
 
@@ -159,7 +165,6 @@ def align_stack_xy(output_path,
                   'offset': (z_offset*50, 0, 0),
                   'resolution': (50, *resolution)}
 
-    with open(attrs_path, 'w') as f:
-        json.dump(attributes, f)
+    set_dataset_attributes(dataset, attributes)
 
     return True

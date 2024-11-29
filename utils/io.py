@@ -38,6 +38,7 @@ def get_tileset_resolution(tileset_path):
 
     return (tileset_path, resolution)
 
+
 def get_tilesets(main_dir, resolution, dir_pattern, num_workers):
     
     # Get all directories containing tilesets that are present in main_dir    
@@ -119,24 +120,33 @@ def load_tif(tif_path, invert, apply_gaussian, apply_clahe, scale):
 
 ### READ TENSORSTORE 
 
-def get_ordered_datasets(output_path, project_name):
-    datasets = [p.split('/')[-1] for p in glob(output_path + '/*') if p.split('/')[-1] != project_name]
+def set_dataset_attributes(dataset, attrs):
+    with open(os.path.join(dataset.kvstore.path, '.zattrs'), 'w') as f:
+        json.dump(attrs, f, indent='')
+    return True 
+
+def get_dataset_attributes(dataset):
+    with open(os.path.join(dataset.kvstore.path, '.zattrs'), 'r') as f:
+        attrs = json.load(f)
+    return attrs
+
+
+def get_ordered_datasets(dataset_paths):
 
     dataset_stores = []
     offsets = []
-    for ds in datasets:
+    for ds in dataset_paths:
         spec = {
-        'driver': 'zarr',
-        'kvstore': {
-            'driver': 'file',
-            'path': os.path.join(output_path, ds),
-        }
-        }
+                'driver': 'zarr',
+                'kvstore': {
+                    'driver': 'file',
+                    'path': ds,
+                }
+               }
         dataset = ts.open(spec).result()
         dataset_stores.append(dataset)
 
-        with open(os.path.join(output_path, ds, '.zattrs'), 'r') as f:
-            attrs = json.load(f)
+        attrs = get_dataset_attributes(dataset)
         offsets.append(attrs['voxel_offset'])
 
     offsets = np.array(offsets)
@@ -147,7 +157,10 @@ def get_ordered_datasets(output_path, project_name):
     return dataset_stores, offsets
 
 
-def get_data_samples(dataset, step_slices):
+def get_data_samples(dataset, step_slices, yx_target_resolution):
+
+    resolution = np.array(get_dataset_attributes(dataset)['resolution'])[1:]
+
     z_max = dataset.domain.exclusive_max[0]-1
 
     z_list = np.arange(0, z_max, step_slices)
@@ -159,6 +172,13 @@ def get_data_samples(dataset, step_slices):
         while not arr.any():
             z += 1
             arr = dataset[z].read().result()
+        
+        if np.any(resolution < yx_target_resolution):
+            fy, fx = resolution/yx_target_resolution
+            arr = resize(arr, None, fx=fx, fy=fy)
+        elif np.any(resolution > yx_target_resolution):
+            raise RuntimeError(f'Dataset resolution ({resolution.tolist()}) must be lower \
+                               than target resolution ({yx_target_resolution.tolist()})')
         data.append(arr)
 
     return np.array(data)
@@ -166,17 +186,16 @@ def get_data_samples(dataset, step_slices):
 
 ### WRITE 
 
-def render_slice_xy(dest, z, tm, m, stride, return_render=False, parallelism=1):
+def render_slice_xy(dest, z, tile_map, meshes, stride, return_render=False, parallelism=1):
     try:
-        stitched, _ = warp.render_tiles(tm, m, parallelism=parallelism, stride=(stride, stride))
-        y,x = stitched.shape
-        
-        if np.any(dest.domain.exclusive_max[1:] < np.array([y, x])):
-            dest = dest.resize(exclusive_max=[None, y, x], expand_only=True).result()
+        stitched, _ = warp.render_tiles(tile_map, meshes, parallelism=parallelism, stride=(stride, stride))
         
         if return_render:
             return stitched
         else:
+            y,x = stitched.shape
+            if np.any(dest.domain.exclusive_max[1:] < np.array([y, x])):
+                dest = dest.resize(exclusive_max=[None, y, x], expand_only=True).result()
             dest[z:z+1, :y, :x].write(stitched).result()
             return True
     except Exception as e:

@@ -7,52 +7,7 @@ import numpy as np
 from PIL import Image
 from sofima import stitch_rigid, stitch_elastic, mesh, flow_utils
 
-
-def xy_offset_to_pad(offset):
-    pad = np.zeros([2,2], dtype=int)
-    x,y = [int(i) for i in offset]
-    
-    if y > 0:
-        pad[0][1] = y
-    else:
-        pad[0][0] = abs(y)
-    
-    if x > 0:
-        pad[1][1] = x
-    else:
-        pad[1][0] = abs(x)
-
-    return pad
-
-
-def estimate_offset_vert(top, bot, overlap):
-    top = top[-overlap:, :]
-    bot = bot[:overlap, :]
-    
-    # Compensate for difference in shape
-    shape_diff = np.array(top.shape) - np.array(bot.shape)
-    if np.any(shape_diff > 0):
-        bot = np.pad(bot, [(shape_diff[0], 0), (shape_diff[1], 0)])
-    elif np.any(shape_diff < 0):
-        top = np.pad(top, [(abs(shape_diff[0]), 0), (abs(shape_diff[1]), 0)])
-    
-    xy_offset, _ = stitch_rigid._estimate_offset(top, bot, 0, filter_size=5)
-    return xy_offset, top, bot
-
-
-def estimate_offset_horiz(left, right, overlap):
-    left = left[:, -overlap:]
-    right = right[:, :overlap]
-    
-    # Compensate for difference in shape
-    shape_diff = np.array(left.shape) - np.array(right.shape)
-    if np.any(shape_diff > 0):
-        right = np.pad(right, [(0, shape_diff[0]), (0, shape_diff[1])])
-    elif np.any(shape_diff < 0):
-        left = np.pad(left, [(0, abs(shape_diff[0])), (0, abs(shape_diff[1]))])
-    
-    xy_offset, _ = stitch_rigid._estimate_offset(left, right, 0, filter_size=5)
-    return xy_offset, left, right
+from .offsets import *
 
 
 def test_laplacian(padded_img1, padded_img2, xy_offset):
@@ -103,7 +58,7 @@ def get_coarse_offset(tile_map,
 
     # Coarse rigid offset between tiles
     cx, cy = stitch_rigid.compute_coarse_offsets(tile_space, tile_map, 
-                                                 overlaps_xy=((200,overlap[1]),(200,overlap[0])),
+                                                 overlaps_xy=((10,overlap[1]),(10,overlap[0])),
                                                  filter_size=filter_size)
     coarse_mesh = stitch_rigid.optimize_coarse_mesh(cx, cy)
 

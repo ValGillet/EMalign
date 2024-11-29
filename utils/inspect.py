@@ -5,8 +5,8 @@ from concurrent import futures
 from glob import glob
 from PIL import ImageDraw,ImageFont
 
-from .io_utils import *
-from .stacks_utils import *
+from .io import *
+from .stacks import *
 
 
 def assemble_tile_map(tile_map):

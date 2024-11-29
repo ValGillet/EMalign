@@ -2,6 +2,10 @@ import os
 # To prevent running out of memory because of preallocation
 os.environ['XLA_PYTHON_CLIENT_PREALLOCATE'] = 'false'
 
+# Influences performance
+os.environ['OMP_NUM_THREADS'] = '4'
+os.environ['MKL_NUM_THREADS'] = '4'
+
 import warnings
 # Prevent printing the following warning, which does not seem to be an issue for the code to run properly:
 #     /home/autoseg/anaconda3/envs/alignment/lib/python3.12/multiprocessing/popen_fork.py:66: RuntimeWarning: os.fork() was called. 
@@ -11,18 +15,13 @@ warnings.filterwarnings("ignore", category=RuntimeWarning, message="os.fork() wa
 import argparse
 import json
 import logging
-import numpy as np
 import sys
-import tensorstore as ts
-
-from concurrent import futures
 from tqdm import tqdm
 
-from emalign.utils.stacks_utils import Stack
-from emalign.utils.io_utils import *
-from emalign.utils.align_xy_utils import *
-from emalign.utils.check_utils import *
-from emalign.align_stack_xy import align_stack_xy
+from .utils.io import *
+from .utils.align_xy import *
+from .utils.inspect import *
+from .stack_align.align_stack_xy import align_stack_xy
 
 
 logging.basicConfig(level=logging.INFO)
@@ -66,14 +65,14 @@ def align_dataset_xy(config_path,
         raise RuntimeError('Output path must be a zarr container (.zarr)')
 
     # Find tilesets with wanted resolution
-    logging.info(f'Aligning tilesets found in: {main_dir}')
-    logging.info(f'Destination: {output_path}')
+    logging.info(f'Tilesets found in:\n   {main_dir}')
+    logging.info(f'Destination:\n   {output_path}')
     logging.info(f' - Resolution: {resolution}')
     logging.info(f' - Compute scale: {scale}')
     logging.info(f' - Tile overlap (px): {overlap}')
     logging.info(f' - Apply gaussian: {apply_gaussian}')
-    logging.info(f' - Apply CLAHE: {apply_clahe}')
-    logging.info(f'Will align {len(stack_configs)} tilesets, including {main_config['tilesets_combined']} combined.')
+    logging.info(f' - Apply CLAHE: {apply_clahe}\n')
+    logging.info(f'Aligning {len(stack_configs)} tilesets, including {main_config['tilesets_combined']} combined.')
     for s in stack_configs.keys():
         logging.info(f'    {s}')
 
@@ -123,6 +122,6 @@ if __name__ == '__main__':
     except Exception:
         print('To select GPUs, specify it before running python, e.g.: CUDA_VISIBLE_DEVICES=0,1 python script.py')
         sys.exit()
-    print(f'Available GPU IDs: {GPU_ids}')
+    print(f'Available GPU IDs: {GPU_ids}\n')
 
     align_dataset_xy(**vars(args))    
