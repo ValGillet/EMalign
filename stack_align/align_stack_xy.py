@@ -19,10 +19,10 @@ import tensorstore as ts
 from concurrent import futures
 from tqdm import tqdm
 
-from ..utils.stacks import Stack
-from ..utils.io import *
-from ..utils.align_xy import *
-from ..utils.inspect import *
+from emalign.utils.stacks import Stack
+from emalign.utils.io import *
+from emalign.utils.align_xy import *
+from emalign.utils.inspect import *
 
 
 logging.basicConfig(level=logging.INFO)

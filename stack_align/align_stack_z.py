@@ -15,8 +15,8 @@ from cv2 import resize
 from tqdm import tqdm
 
 from sofima import warp
-from ..utils.align_z import compute_flow_dataset, get_inv_map, get_data
-from ..utils.io import get_dataset_attributes, set_dataset_attributes
+from emalign.utils.align_z import compute_flow_dataset, get_inv_map, get_data
+from emalign.utils.io import get_dataset_attributes, set_dataset_attributes
 
 logging.basicConfig(level=logging.INFO)
 logging.getLogger('absl').setLevel(logging.WARNING)
