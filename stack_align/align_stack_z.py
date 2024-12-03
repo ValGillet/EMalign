@@ -1,4 +1,6 @@
 import os
+
+from emalign.utils.offsets import estimate_rough_z_offset
 os.environ['XLA_PYTHON_CLIENT_PREALLOCATE'] = 'false'
 os.environ['OMP_NUM_THREADS'] = '4'
 os.environ['MKL_NUM_THREADS'] = '4'
@@ -14,7 +16,7 @@ from connectomics.common import bounding_box
 from cv2 import resize
 from tqdm import tqdm
 
-from sofima import warp
+from sofima import warp, mesh
 from emalign.utils.align_z import compute_flow_dataset, get_inv_map, get_data
 from emalign.utils.io import get_dataset_attributes, set_dataset_attributes
 
@@ -30,6 +32,7 @@ def align_stack_z(destination_path,
                   patch_size, 
                   stride, 
                   max_deviation,
+                  max_magnitude,
                   filter_size,
                   range_limit,
                   first_slice,
@@ -58,6 +61,17 @@ def align_stack_z(destination_path,
     if attrs.get('z_aligned', False) == True and not overwrite:
         logging.info(f'Dataset {dataset_name} was already processed and will be skipped.')
         return False
+    
+    # Make the resolution match the target
+    res = attrs['resolution'][-1]
+    if yx_target_resolution is None:
+        target_scale = 1
+    else:
+        target_scale = res/yx_target_resolution[0]
+
+        assert yx_target_resolution[0] == yx_target_resolution[1], 'Target resolution must be the same for X and Y.'
+        assert target_scale <= 1, 'Target resolution must be lower than current dataset resolution.'
+    logging.info(f'Target scale: {target_scale}')
     
     offset = np.array(offset)
 
@@ -94,7 +108,7 @@ def align_stack_z(destination_path,
 
         # Re-compute offset to account for drift during z align of the previous stack(s)
         # Commented out because resulted in a negative offset. It might not be necessary
-        # yx_offset = estimate_rough_offset(first_slice, dataset[0].read().result())
+        # yx_offset = estimate_rough_z_offset(first_slice, dataset[0].read().result())
         # offset[1:] = yx_offset
         
     # Compute flow
@@ -104,23 +118,20 @@ def align_stack_z(destination_path,
                                 patch_size, 
                                 stride, 
                                 max_deviation,
+                                max_magnitude,
                                 filter_size,
                                 range_limit,
                                 first_slice,
-                                yx_target_resolution,
+                                target_scale,
                                 num_threads)
+    
 
-    inv_map, flow_bbox = get_inv_map(flow, stride, dataset_name)
-
-    # Make the resolution match the target
-    if yx_target_resolution is None or yx_target_resolution[0] == 1:
-        target_scale = 1
-    else:
-        res = get_dataset_attributes(dataset)['resolution'][-1]
-        target_scale = res/yx_target_resolution[0]
-
-        assert yx_target_resolution[0] == yx_target_resolution[1], 'Target resolution must be the same for X and Y.'
-        assert target_scale < 1, 'Target resolution must be lower than current dataset resolution.'
+    k0 = 0.001
+    k = 0.3
+    mesh_config = mesh.IntegrationConfig(dt=0.001, gamma=0.0, k0=k0, k=k, stride=(stride, stride), num_iters=1000,
+                                         max_iters=100000, stop_v_max=0.005, dt_max=1000, start_cap=0.01,
+                                         final_cap=10, prefer_orig_order=True)
+    inv_map, flow_bbox = get_inv_map(flow, stride, dataset_name, mesh_config)
 
     # Get first slice
     if first_slice is None:

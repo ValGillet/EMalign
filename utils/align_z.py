@@ -169,21 +169,13 @@ def compute_flow_dataset(dataset,
                          patch_size, 
                          stride, 
                          max_deviation,
+                         max_magnitude,
                          filter_size, 
                          range_limit,
                          first_slice=None,
-                         yx_target_resolution=None,
+                         target_scale=None,
                          num_threads=0):
     
-    if yx_target_resolution is None or yx_target_resolution[0] == 1:
-        target_scale = 1
-    else:
-        res = get_dataset_attributes(dataset)['resolution'][-1]
-        target_scale = res/yx_target_resolution[0]
-
-        assert yx_target_resolution[0] == yx_target_resolution[1], 'Target resolution must be the same for X and Y.'
-        assert target_scale < 1, 'Target resolution must be lower than current dataset resolution.'
-
     dataset_name = dataset.kvstore.path.split('/')[-2]
 
     flow = _compute_flow(dataset, offset, patch_size, stride, 1, filter_size, range_limit, target_scale, first_slice, num_threads)
@@ -196,12 +188,12 @@ def compute_flow_dataset(dataset,
     flow = flow_utils.clean_flow(flow, 
                                  min_peak_ratio=1.6, 
                                  min_peak_sharpness=1.6, 
-                                 max_magnitude=0, 
+                                 max_magnitude=max_magnitude, 
                                  max_deviation=max_deviation)
     ds_flow = flow_utils.clean_flow(ds_flow, 
                                     min_peak_ratio=1.6, 
                                     min_peak_sharpness=1.6, 
-                                    max_magnitude=0, 
+                                    max_magnitude=max_magnitude, 
                                     max_deviation=max_deviation)
     
     ds_flow_hires = np.zeros_like(flow)
@@ -223,10 +215,12 @@ def compute_flow_dataset(dataset,
                                       max_gradient=0, max_deviation=max_deviation, min_patch_size=400)
 
 
-def get_inv_map(flow, stride, dataset_name):
-    config = mesh.IntegrationConfig(dt=0.001, gamma=0.0, k0=0.01, k=0.1, stride=(stride, stride), num_iters=1000,
-                                    max_iters=100000, stop_v_max=0.005, dt_max=1000, start_cap=0.01,
-                                    final_cap=10, prefer_orig_order=True)
+def get_inv_map(flow, stride, dataset_name, mesh_config=None):
+
+    if mesh_config is None:
+        mesh_config = mesh.IntegrationConfig(dt=0.001, gamma=0.0, k0=0.01, k=0.1, stride=(stride, stride), num_iters=1000,
+                                            max_iters=100000, stop_v_max=0.005, dt_max=1000, start_cap=0.01,
+                                            final_cap=10, prefer_orig_order=True)
 
     solved = [np.zeros_like(flow[:, 0:1, ...])]
     origin = jnp.array([0., 0.])
@@ -235,7 +229,7 @@ def get_inv_map(flow, stride, dataset_name):
                   desc=f'{dataset_name}: Relaxing mesh'):
         prev = map_utils.compose_maps_fast(flow[:, z:z+1, ...], origin, stride,
                                            solved[-1], origin, stride)
-        x, _, _ = mesh.relax_mesh(np.zeros_like(solved[0]), prev, config)
+        x, _, _ = mesh.relax_mesh(np.zeros_like(solved[0]), prev, mesh_config)
         solved.append(np.array(x))
 
     solved = np.concatenate(solved, axis=1)

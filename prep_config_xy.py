@@ -231,9 +231,9 @@ if __name__ == '__main__':
                         required=True,
                         type=str,
                         help='Path to the zarr container where to write stitched tifs.')
-    parser.add_argument('-cfg', '--config_dir',
-                        metavar='OUT_DIR',
-                        dest='config_dir',
+    parser.add_argument('-p', '--project-dir',
+                        metavar='PROJECT_DIR',
+                        dest='project_dir',
                         required=True,
                         type=str,
                         help='Directory where the config will be written.')
@@ -289,7 +289,7 @@ if __name__ == '__main__':
                         action='store_false',
                         default=True,
                         help='Don\'t apply CLAHE to images before alignment.') 
-    parser.add_argument('-p', '--dir_pattern',
+    parser.add_argument('--dir_pattern',
                         metavar='DIR_PATTERN',
                         dest='dir_pattern',
                         nargs=1,

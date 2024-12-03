@@ -1,5 +1,3 @@
-import os
-import logging
 import numpy as np
 
 from cv2 import resize
@@ -7,7 +5,7 @@ from cv2 import resize
 from connectomics.common import bounding_box
 from sofima import flow_field, flow_utils, map_utils, warp
 
-from emalign.utils.align_z import compute_mask, pad_to_shape, get_inv_map
+from .align_z import compute_mask, pad_to_shape, get_inv_map
 
 
 def align_arrays_z(prev, 

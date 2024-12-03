@@ -59,6 +59,7 @@ def align_dataset_z(config_paths,
     patch_size      = config_z['patch_size']     
     stride          = config_z['stride']
     max_deviation   = config_z['max_deviation'] 
+    max_magnitude   = config_z['max_magnitude']
     scale_offset    = config_z['scale_offset']        
     scale_flow      = config_z['scale_flow']    
     step_slices     = config_z['step_slices'] 
@@ -167,6 +168,7 @@ def align_dataset_z(config_paths,
                   'stride': stride, 
                   'patch_size': patch_size, 
                   'max_deviation': max_deviation,
+                  'max_magnitude': max_magnitude,
                   'filter_size': filter_size,
                   'range_limit': range_limit,
                   'first_slice': first_slice,
@@ -188,6 +190,8 @@ def align_dataset_z(config_paths,
                             scale_flow, 
                             patch_size, 
                             stride, 
+                            max_deviation,
+                            max_magnitude,
                             filter_size,
                             range_limit,
                             first_slice,
