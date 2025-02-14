@@ -6,21 +6,27 @@ import tensorstore as ts
 
 from concurrent import futures
 from connectomics.common import bounding_box
-from cv2 import resize
+from cv2 import resize, equalizeHist
 from sofima import flow_field, flow_utils, map_utils, mesh, warp
 from tqdm import tqdm
+
+from emprocess.utils.transform import rotate_image
 
 from .io import get_data_samples, get_dataset_attributes
 from .arrays import compute_mask, pad_to_shape
 from .offsets import *
 
 
-def get_data(dataset, z, offset, target_scale):
+def get_data(dataset, z, offset, target_scale, rotation_angle=0):
     try:
         data = dataset[z, ...].read().result()
+        data = equalizeHist(data)
 
         if target_scale < 1:
             data = resize(data, None, fx=target_scale, fy=target_scale)
+
+        if rotation_angle != 0:
+            data = rotate_image(data, rotation_angle)
 
         data = np.pad(data, np.stack([offset[1:], [0,0]]).T)
         return data
@@ -35,7 +41,8 @@ def compute_datasets_offsets(datasets,
                              filter_size,
                              step_slices,
                              yx_target_resolution,
-                             num_workers):
+                             pad_offset=(0,0),
+                             num_workers=0):
     
     offsets_yx = [[0,0]]
     fs = []
@@ -47,7 +54,7 @@ def compute_datasets_offsets(datasets,
 
         # Do very first dataset
         data = fs.pop().result()
-        inner_offsets = [estimate_rough_z_offset(data[i-1], data[i], scale=scale, range_limit=range_limit, filter_size=filter_size) 
+        inner_offsets = [estimate_rough_z_offset(data[i-1], data[i], scale=scale, range_limit=range_limit, filter_size=filter_size)[0] 
                         for i in range(1, len(data))]
         # Offset between first and last image of the first dataset
         last_inner_offset = np.sum(inner_offsets, axis=0)
@@ -59,17 +66,18 @@ def compute_datasets_offsets(datasets,
             data = fs.pop().result()
 
             # Calculate offset to the last stack 
-            offset_to_last = estimate_rough_z_offset(prev, data[0], scale=scale, range_limit=range_limit, filter_size=filter_size)
+            offset_to_last, _ = estimate_rough_z_offset(prev, data[0], scale=scale, range_limit=range_limit, filter_size=filter_size)
             offsets_yx.append(offset_to_last + last_inner_offset)
 
             # Offset between first and last image (to account for differences between first images of different stacks and drift)
-            last_inner_offset = np.sum([estimate_rough_z_offset(data[i-1], data[i], scale=scale, range_limit=range_limit, filter_size=filter_size) 
+            last_inner_offset = np.sum([estimate_rough_z_offset(data[i-1], data[i], scale=scale, range_limit=range_limit, filter_size=filter_size)[0] 
                                     for i in range(1, len(data))], axis=0)
 
     offsets_yx = np.array(offsets_yx)
 
     yx_cumsum = np.cumsum(offsets_yx, axis=0)
     offsets[:, 1:] += (yx_cumsum - np.min(yx_cumsum, axis=0)).astype(int)
+    offsets[:, 1:] += np.array(pad_offset)
     return offsets
 
 
@@ -80,8 +88,9 @@ def _compute_flow(dataset,
                   scale, 
                   filter_size, 
                   range_limit,
-                  target_scale,
                   first_slice=None,
+                  target_scale=1,
+                  rotation_angle=0,
                   num_threads=0):
 
     dataset_name = dataset.kvstore.path.split('/')[-2]
@@ -109,56 +118,49 @@ def _compute_flow(dataset,
     prev_mask = compute_mask(prev, filter_size, range_limit)
 
     flows = []
-    fs = []
-    with futures.ThreadPoolExecutor(num_threads) as tpe:
-        # Prefetch the next sections to memory so that we don't have to wait for them
-        # to load when the GPU becomes available.
-        for z in range(start, dataset.shape[0]):
-            fs.append(tpe.submit(get_data, dataset, z, offset, target_scale))
-        
-        fs = fs[::-1]
-        for z in tqdm(range(start, dataset.shape[0]),
-                      position=0,
-                      desc=f'{dataset_name}: Computing flow (scale={scale})'):
-            curr = fs.pop().result()
+    for z in tqdm(range(start, dataset.shape[0]),
+                    position=0,
+                    desc=f'{dataset_name}: Computing flow (scale={scale})'):
+        curr = get_data(dataset, z, offset, target_scale, rotation_angle=rotation_angle)
 
-            if not curr.any():
-                # If empty slice, compare to the next one
-                continue
+        if not curr.any():
+            # If empty slice, compare to the next one
+            continue
 
-            try:
-                if z == 0:
-                    # Different shapes may cause issues so we need to bring prev to the right shape without losing info
-                    # Note that we don't want to change the shape of curr if we can avoid it because then we'd have to keep track for 
-                    # the whole pipeline since the flow shape will have changed too.
-                    if np.any(np.array(curr.shape) > np.array(prev.shape)):
-                        # If prev is smaller, we pad to shape with zeros to the end of the data
-                        # It doesn't affect offset
-                        prev = pad_to_shape(prev, curr.shape)
-                        prev_mask = pad_to_shape(prev_mask, curr.shape)
-                    if np.any(np.array(prev.shape) > np.array(curr.shape)):
-                        # If prev is larger, we crop to shape
-                        # Prev and curr should be roughly overlapping, so we should not be losing relevant info
-                        y,x = curr.shape
-                        prev = prev[:y, :x]
-                        prev_mask = prev_mask[:y, :x]
+        try:
+            # if z == 0:
+            # Different shapes may cause issues so we need to bring prev to the right shape without losing info
+            # Note that we don't want to change the shape of curr if we can avoid it because then we'd have to keep track for 
+            # the whole pipeline since the flow shape will have changed too.
+            if np.any(np.array(curr.shape) > np.array(prev.shape)):
+                # If prev is smaller, we pad to shape with zeros to the end of the data
+                # It doesn't affect offset
+                prev = pad_to_shape(prev, curr.shape)
+                prev_mask = pad_to_shape(prev_mask, curr.shape)
+            if np.any(np.array(prev.shape) > np.array(curr.shape)):
+                # If prev is larger, we crop to shape
+                # Prev and curr should be roughly overlapping, so we should not be losing relevant info
+                y,x = curr.shape
+                prev = prev[:y, :x]
+                prev_mask = prev_mask[:y, :x]
 
-                    # First slice comes from a different dataset which may have black tiles
-                    # We use masks to ensure that only regions with data are used to compute the match
-                    curr_mask = compute_mask(curr, filter_size, range_limit)
+            # First slice comes from a different dataset which may have black tiles
+            # We use masks to ensure that only regions with data are used to compute the match
+            curr_mask = compute_mask(curr, filter_size, range_limit)
 
-                    flow = mfc.flow_field(prev, curr, (patch_size, patch_size),
-                                          (stride, stride), batch_size=512,
-                                          pre_mask=prev_mask, post_mask=curr_mask)
-                else:
-                    # We could use masks here too, but slices within a dataset match fairly well already and computing masks takes time
-                    flow = mfc.flow_field(prev, curr, (patch_size, patch_size),
-                                          (stride, stride), batch_size=512)
-                flows.append(flow)
+            flow = mfc.flow_field(prev, curr, (patch_size, patch_size),
+                                    (stride, stride), batch_size=256,
+                                    pre_mask=prev_mask, post_mask=curr_mask)
+            # else:
+            #     # We could use masks here too, but slices within a dataset match fairly well already and computing masks takes time
+            #     flow = mfc.flow_field(prev, curr, (patch_size, patch_size),
+            #                             (stride, stride), batch_size=512)
+            flows.append(flow)
 
-                prev = curr
-            except Exception as e:
-                raise RuntimeError(e)
+            prev = curr
+            prev_mask = curr_mask
+        except Exception as e:
+            raise RuntimeError(e)
     jax.clear_caches()
     return np.transpose(np.array(flows), [1, 0, 2, 3]) # [channels, z, y, x]
 
@@ -174,12 +176,33 @@ def compute_flow_dataset(dataset,
                          range_limit,
                          first_slice=None,
                          target_scale=None,
+                         rotation_angle=0,
                          num_threads=0):
     
     dataset_name = dataset.kvstore.path.split('/')[-2]
 
-    flow = _compute_flow(dataset, offset, patch_size, stride, 1, filter_size, range_limit, target_scale, first_slice, num_threads)
-    ds_flow = _compute_flow(dataset, (offset*scale).astype(int), patch_size, stride, scale, target_scale, filter_size, range_limit, first_slice, num_threads)
+    flow = _compute_flow(dataset=dataset, 
+                         offset=offset, 
+                         patch_size=patch_size, 
+                         stride=stride, 
+                         scale=1, 
+                         filter_size=filter_size, 
+                         range_limit=range_limit, 
+                         first_slice=first_slice, 
+                         target_scale=target_scale, 
+                         rotation_angle=rotation_angle, 
+                         num_threads=num_threads)
+    ds_flow = _compute_flow(dataset=dataset, 
+                            offset=(offset*scale).astype(int), 
+                            patch_size=patch_size, 
+                            stride=stride, 
+                            scale=scale, 
+                            filter_size=filter_size, 
+                            range_limit=range_limit, 
+                            first_slice=first_slice, 
+                            target_scale=target_scale, 
+                            rotation_angle=rotation_angle, 
+                            num_threads=num_threads)
 
     pad = patch_size // 2 // stride
     flow = np.pad(flow, [[0, 0], [0, 0], [pad, pad], [pad, pad]], constant_values=np.nan)
@@ -208,11 +231,12 @@ def compute_flow_dataset(dataset,
         # Upsample and scale spatial components.
         resampled = map_utils.resample_map(
             ds_flow[:, z:z+1, ...],  #
-            bbox_ds, bbox, 2, 1)
+            bbox_ds, bbox, 
+            1 / scale, 1)
         ds_flow_hires[:, z:z + 1, ...] = resampled / scale
 
     return flow_utils.reconcile_flows((flow, ds_flow_hires), 
-                                      max_gradient=0, max_deviation=max_deviation, min_patch_size=400)
+                                      max_gradient=0, max_deviation=max_deviation, min_patch_size=0)
 
 
 def get_inv_map(flow, stride, dataset_name, mesh_config=None):
@@ -243,9 +267,14 @@ def get_inv_map(flow, stride, dataset_name, mesh_config=None):
 
 def align_arrays_z(prev, 
                    curr, 
+                   scale, 
                    patch_size, 
                    stride, 
-                   scale, 
+                   max_magnitude,
+                   max_deviation,
+                   k0,
+                   k,
+                   gamma,
                    filter_size, 
                    range_limit,
                    num_threads=0):
@@ -282,7 +311,7 @@ def align_arrays_z(prev,
         
         try:
             flow = mfc.flow_field(prev, curr, (patch_size, patch_size),
-                                (stride, stride), batch_size=512,
+                                (stride, stride), batch_size=256,
                                 pre_mask=prev_mask, post_mask=curr_mask)
         except Exception as e:
             raise RuntimeError(e)
@@ -298,8 +327,8 @@ def align_arrays_z(prev,
     flow = flow_utils.clean_flow(flow, 
                                  min_peak_ratio=1.6, 
                                  min_peak_sharpness=1.6, 
-                                 max_magnitude=0, 
-                                 max_deviation=0)
+                                 max_magnitude=max_magnitude, 
+                                 max_deviation=max_deviation)
     ds_flow = flow_utils.clean_flow(ds_flow, 
                                     min_peak_ratio=1.6, 
                                     min_peak_sharpness=1.6, 
@@ -322,7 +351,10 @@ def align_arrays_z(prev,
     flow = flow_utils.reconcile_flows((flow, ds_flow_hires), 
                                        max_gradient=0, max_deviation=0, min_patch_size=400)
 
-    inv_map, flow_bbox = get_inv_map(flow, stride, 'Test')
+    mesh_config = mesh.IntegrationConfig(dt=0.001, gamma=gamma, k0=k0, k=k, stride=(stride, stride), num_iters=1000,
+                                         max_iters=100000, stop_v_max=0.005, dt_max=1000, start_cap=0.01,
+                                         final_cap=10, prefer_orig_order=True)
+    inv_map, flow_bbox = get_inv_map(flow, stride, 'Test', mesh_config)
 
     data_bbox = bounding_box.BoundingBox(start=(0, 0, 0), 
                                          size=(output_shape[-1], output_shape[-2], 1))

@@ -7,7 +7,7 @@ from scipy.fftpack import dst
 import tensorstore as ts
 
 from concurrent import futures
-from cv2 import resize, GaussianBlur, createCLAHE
+from cv2 import resize, GaussianBlur, createCLAHE, equalizeHist
 from glob import glob
 from PIL import Image
 from tqdm import tqdm
@@ -111,6 +111,8 @@ def load_tif(tif_path, invert, apply_gaussian, apply_clahe, scale):
                             tileGridSize= (10, 10))
         img = clahe.apply(img)
 
+    img = equalizeHist(img)
+
     # Downsample
     if scale < 1:
         return img, resize(img, None, fx=scale, fy=scale)
@@ -186,9 +188,9 @@ def get_data_samples(dataset, step_slices, yx_target_resolution):
 
 ### WRITE 
 
-def render_slice_xy(dest, z, tile_map, meshes, stride, return_render=False, parallelism=1):
+def render_slice_xy(dest, z, tile_map, meshes, stride, tile_masks=None, return_render=False, parallelism=1, **kwargs):
     try:
-        stitched, _ = warp.render_tiles(tile_map, meshes, parallelism=parallelism, stride=(stride, stride))
+        stitched, _ = warp.render_tiles(tile_map, meshes, tile_masks=tile_masks, parallelism=parallelism, stride=(stride, stride), **kwargs)
         
         if return_render:
             return stitched

@@ -23,7 +23,7 @@ from emalign.utils.stacks import Stack
 from emalign.utils.io import *
 from emalign.utils.align_xy import *
 from emalign.utils.inspect import *
-
+from emalign.utils.stacks import parse_stack_info
 
 logging.basicConfig(level=logging.INFO)
 logging.getLogger('absl').setLevel(logging.WARNING)
@@ -35,6 +35,7 @@ def align_stack_xy(output_path,
                    tile_maps_paths,
                    tile_maps_invert,
                    resolution,
+                   offset,
                    stride,
                    overlap,
                    scale,
@@ -51,12 +52,12 @@ def align_stack_xy(output_path,
     attrs_path = os.path.join(zarr_path, '.zattrs')
 
     z_offset = min(stack.slices)
-    z_max    = max(stack.slices)-z_offset
+    z_shape  = max(stack.slices)-min(stack.slices)
 
     # Skip if already fully processed
-    if os.path.exists(attrs_path):
-        logging.info(f'Skipping {stack.stack_name} because it was already processed.')
-        return False
+    #if os.path.exists(attrs_path):
+     #   logging.info(f'Skipping {stack.stack_name} because it was already processed.')
+      #  return False
 
     dataset = ts.open({'driver': 'zarr',
                         'kvstore': {
@@ -64,7 +65,7 @@ def align_stack_xy(output_path,
                             'path': zarr_path,
                                     },
                         'metadata':{
-                            'shape': [z_max + 1, 
+                            'shape': [z_shape + 1, 
                                         1, 1],
                             'chunks':[1,512,512]
                                     },
@@ -77,94 +78,123 @@ def align_stack_xy(output_path,
     #####################
     ### PROCESS STACK ###
     #####################
-    fs_read = []
-    fs_warp = []
-    with futures.ThreadPoolExecutor(num_threads) as tpe:
-        # Check if scale works for the first slice
-        z = stack.slices[0]
-        z, tile_map, tile_map_ds = load_tilemap({z: stack.slice_to_tilemap[z]}, 
-                                                stack.tile_maps_invert,
-                                                apply_gaussian, 
-                                                apply_clahe,
-                                                scale)  
-        if scale<1:
-            cx, cy, coarse_mesh = get_coarse_offset(tile_map_ds, 
-                                                    overlap=overlap)
-        else:
-            cx, cy, coarse_mesh = get_coarse_offset(tile_map, 
-                                                    overlap=overlap)
+    # fs_read = []
+    # fs_warp = []
+    # with futures.ThreadPoolExecutor(num_threads) as tpe:
+    #     for z in stack.slices:
+    #         fs_read.append(tpe.submit(load_tilemap, 
+    #                                     {z: stack.slice_to_tilemap[z]}, 
+    #                                     stack.tile_maps_invert,
+    #                                     apply_gaussian, 
+    #                                     apply_clahe,
+    #                                     scale))
 
-        try:
-            if np.isinf(np.concatenate([cx,cy])).any():
-                # If scale doesn't work, coarse offset vectors are infinite. 
-                # Using non-downsampled images may solve it.
-                # logging.info(f'Using scale=1 for stack: {stack.stack_name}')
-                scale = 1
-
-                cx, cy, coarse_mesh = get_coarse_offset(tile_map, 
-                                                        overlap=overlap)
-                
-                meshes = get_elastic_mesh(tile_map, 
-                                            cx, 
-                                            cy, 
-                                            coarse_mesh)
-            else:
-                meshes = get_elastic_mesh(tile_map_ds, 
-                                            cx, 
-                                            cy, 
-                                            coarse_mesh)
-                meshes = {k:rescale_mesh(v, int(1/scale)) for k,v in meshes.items()}
-        except Exception as e:
-            raise RuntimeError(e)
-        # Queue the warping task and move on to the next slices
-        fs_warp.append(tpe.submit(render_slice_xy, dataset, z-z_offset, tile_map, meshes, stride))
-
-        # Carry on with the rest of the tasks
-        for z in stack.slices[1:]:
-            fs_read.append(tpe.submit(load_tilemap, 
-                                        {z: stack.slice_to_tilemap[z]}, 
+        # # Process tilemaps synchronously because functions use JAX and GPU (have not tested though)
+        # for f in tqdm(futures.as_completed(fs_read), total=len(fs_read), 
+        #               position=2, desc=f'{stack.stack_name}: Computing elastic meshes', leave=False):
+    pbar = tqdm(stack.slices, position=2, desc=f'{stack.stack_name}: Processing', leave=False)
+    for z in pbar:
+        pbar.set_description(f'{stack.stack_name}: Loading tile_map...')
+        z, tile_map, _ = load_tilemap({z: stack.slice_to_tilemap[z]}, 
                                         stack.tile_maps_invert,
                                         apply_gaussian, 
                                         apply_clahe,
-                                        scale))
+                                        scale)
 
-        # Process tilemaps synchronously because functions use JAX and GPU (have not tested though)
-        for f in tqdm(futures.as_completed(fs_read), total=len(fs_read), 
-                      position=2, desc=f'{stack.stack_name}: Computing elastic meshes', leave=False):
-            z, tile_map, tile_map_ds = f.result()
-            tile_map_ds = tile_map if scale == 1 else tile_map_ds
-            
-            cx, cy, coarse_mesh = get_coarse_offset(tile_map_ds, 
-                                                    overlap=overlap)                    
-            
-            meshes = get_elastic_mesh(tile_map_ds, 
-                                        cx, 
-                                        cy, 
-                                        coarse_mesh)
+        tile_space = (np.array(list(tile_map.keys()))[:,1].max()+1, 
+                        np.array(list(tile_map.keys()))[:,0].max()+1)
 
-            if scale < 1:
-                meshes = {k:rescale_mesh(v, int(1/scale)) for k,v in meshes.items()}
+        # Pad tiles so they are all the same shape (required by sofima)
+        max_shape = np.max([t.shape for t in tile_map.values()],axis=0)
+
+        tile_masks = {}
+        for k in sorted(tile_map): 
+            tile = tile_map[k]
+            mask = np.ones_like(tile)
+
+            if np.any(np.array(tile.shape) != max_shape):
+                d = k[::-1] == (np.array(tile_space) - 1)
+                d[1] = np.logical_not(d[1])
+
+                tile = pad_to_shape(tile, max_shape, d.astype(int))
+                mask = pad_to_shape(mask, max_shape, d.astype(int))
+            
+            tile_map[k] = tile
+            tile_masks[k] = mask
+        
+        pbar.set_description(f'{stack.stack_name}: Computing elastic meshes...')
+        cx, cy, coarse_mesh = get_coarse_offset(tile_map, 
+                                                tile_space,
+                                                overlap=overlap)                    
+        
+        meshes = get_elastic_mesh(tile_map, 
+                                    cx, 
+                                    cy, 
+                                    coarse_mesh,
+                                    stride)
+        
+        # Ensure that first tiles acquired are rendered last because they are sharper and should be on top
+        meshes = {k:meshes[k] for k in sorted(meshes)[::-1]}
+
+        pbar.set_description(f'{stack.stack_name}: Rendering...')
+        render_slice_xy(dataset, z-z_offset, tile_map, meshes, stride, tile_masks, parallelism=num_threads)
 
             # ProcessPoolExecutor is faster for CPU intensive tasks
-            fs_warp.append(tpe.submit(render_slice_xy, dataset, z-z_offset, tile_map, meshes, stride))
+            # fs_warp.append(tpe.submit(render_slice_xy, dataset, z-z_offset, tile_map, meshes, stride, tile_masks))
 
         # Wait for processes to finish
-        pbar = tqdm(futures.as_completed(fs_warp), 
-                    total=len(fs_warp), 
-                    position=2, 
-                    desc=f'{stack.stack_name}: Stitching and writing tiles', 
-                    leave=True)
-        for f in pbar:
-            f.result()
-        pbar.set_description(f'{stack.stack_name}: done')
+        # pbar = tqdm(futures.as_completed(fs_warp), 
+        #             total=len(fs_warp), 
+        #             position=2, 
+        #             desc=f'{stack.stack_name}: Stitching and writing tiles', 
+        #             leave=True)
+        # for f in pbar:
+        #     f.result()
+    pbar.set_description(f'{stack.stack_name}: done')
 
     # Attributes are ZYX coordinates
     # Resolution in Z is hard coded to be 50 nm currently
     # Keys are used in subsequent steps in the alignment and segmentation pipeline
-    attributes = {'voxel_offset': (z_offset, 0, 0),
-                  'offset': (z_offset*50, 0, 0),
-                  'resolution': (50, *resolution)}
+    attributes = {'voxel_offset': offset,
+                  'offset': list(map(int, np.array(offset)*np.array([50, *resolution]))),
+                  'resolution': list(map(int, (50, *resolution)))}
 
     set_dataset_attributes(dataset, attributes)
 
     return True
+
+
+if __name__ == '__main__':
+
+    config_path = sys.argv[1]
+    stack_name  = sys.argv[2]
+    num_threads = int(sys.argv[3])
+
+    with open(config_path, 'r') as f:
+        main_config = json.load(f)
+
+    main_dir        = main_config['main_dir']
+    output_path     = main_config['output_path']
+    resolution      = main_config['resolution']
+    offset          = main_config['offset']
+    scale           = main_config['scale']
+    stride          = main_config['stride']
+    overlap         = main_config['overlap']
+    apply_gaussian  = main_config['apply_gaussian']
+    apply_clahe     = main_config['apply_clahe']
+    stack_configs   = main_config['stack_configs']
+    
+    tile_maps_paths, tile_maps_invert = parse_stack_info(stack_configs[stack_name])
+
+    align_stack_xy(output_path,
+                   stack_name,
+                   tile_maps_paths,
+                   tile_maps_invert,
+                   resolution,
+                   offset,
+                   stride,
+                   overlap,
+                   scale,
+                   apply_gaussian,
+                   apply_clahe,
+                   num_threads)

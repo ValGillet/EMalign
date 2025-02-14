@@ -52,7 +52,7 @@ def estimate_offset_horiz(left, right, overlap):
     return xy_offset, left, right
 
 
-def estimate_rough_z_offset(img1, img2, scale=0.1, range_limit=1, filter_size=5): 
+def estimate_rough_z_offset(img1, img2, scale=0.1, range_limit=10, filter_size=5, patch_factor=1): 
     '''
     Based on sofima.stitch_rigid._estimate_offset
     '''
@@ -68,12 +68,15 @@ def estimate_rough_z_offset(img1, img2, scale=0.1, range_limit=1, filter_size=5)
 
     img1_ds = pad_to_shape(img1_ds, target_shape)
     img2_ds = pad_to_shape(img2_ds, target_shape)
-    mask_1 = pad_to_shape(mask_1, target_shape)
-    mask_2 = pad_to_shape(mask_2, target_shape)
+    mask_1 = pad_to_shape(mask_1, target_shape, pad_value=1)
+    mask_2 = pad_to_shape(mask_2, target_shape, pad_value=1)
 
     mfc = flow_field.JAXMaskedXCorrWithStatsCalculator()
-    xo, yo, _, _ = mfc.flow_field(
-        img1_ds, img2_ds, pre_mask=mask_1, post_mask=mask_2, patch_size=img1_ds.shape, step=(1, 1)
+    xo, yo, _, pr = mfc.flow_field(
+        img1_ds, img2_ds, 
+        pre_mask=mask_1, post_mask=mask_2, 
+        patch_size=tuple((np.array(img1_ds.shape)/patch_factor).astype(int).tolist()), 
+        step=tuple((np.array(img1_ds.shape)/patch_factor).astype(int).tolist())
     ).squeeze()
 
-    return np.array([yo, xo])/scale
+    return np.array([yo, xo])/scale, pr

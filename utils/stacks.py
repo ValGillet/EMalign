@@ -8,6 +8,22 @@ from .align_xy import estimate_offset_horiz, estimate_offset_vert, test_laplacia
 from .io import *
 
 
+def parse_stack_info(config_path):
+    with open(config_path, 'r') as f:
+        config = json.load(f)
+
+    tile_maps_paths = {}
+
+    for z, tm in config['tile_maps'].items():
+        tm = {tuple(int(i) 
+                for i in re.findall(r'\b\d+\b', k)): v for k,v in tm.items()}
+        tile_maps_paths.update({int(z): tm})
+
+    tile_maps_invert = {tuple(int(i) for i in re.findall(r'\b\d+\b', k)): v 
+                            for k,v in config['tile_maps_invert'].items()}
+    return tile_maps_paths, tile_maps_invert
+
+
 class Stack:
     def __init__(self, stack_path=None, stack_name=None, tile_maps_paths=None, tile_maps_invert=None):
         if stack_path is not None:
@@ -185,6 +201,8 @@ def combine_stacks(pair, overlap):
     combined_stack._set_tilemaps_paths(combined_tile_maps)
     combined_stack.tile_maps_invert = stack_1.tile_maps_invert | {tuple((np.array(k)+k2_offset).tolist()): v 
                                                                     for k, v in stack_2.tile_maps_invert.items()}
+    min_index = np.array(list(combined_stack.tile_maps_invert.keys())).min(0)
+    combined_stack.tile_maps_invert = {tuple((np.array(k)-min_index).tolist()):v for k, v in combined_stack.tile_maps_invert.items()}
     
     combined_stack.stack_name = '-'.join(pair_names)
     

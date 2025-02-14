@@ -18,31 +18,16 @@ import logging
 import sys
 from tqdm import tqdm
 
-from .utils.io import *
-from .utils.align_xy import *
-from .utils.inspect import *
-from .stack_align.align_stack_xy import align_stack_xy
+from emalign.utils.io import *
+from emalign.utils.align_xy import *
+from emalign.utils.inspect import *
+from emalign.utils.stacks import parse_stack_info
+from emalign.stack_align.align_stack_xy import align_stack_xy
 
 
 logging.basicConfig(level=logging.INFO)
 logging.getLogger('absl').setLevel(logging.WARNING)
 logging.getLogger('jax._src.xla_bridge').setLevel(logging.WARNING)
-
-
-def parse_stack_info(config_path):
-    with open(config_path, 'r') as f:
-        config = json.load(f)
-
-    tile_maps_paths = {}
-
-    for z, tm in config['tile_maps'].items():
-        tm = {tuple(int(i) 
-                for i in re.findall(r'\b\d+\b', k)): v for k,v in tm.items()}
-        tile_maps_paths.update({int(z): tm})
-
-    tile_maps_invert = {tuple(int(i) for i in re.findall(r'\b\d+\b', k)): v 
-                            for k,v in config['tile_maps_invert'].items()}
-    return tile_maps_paths, tile_maps_invert
 
 
 def align_dataset_xy(config_path,
@@ -54,6 +39,7 @@ def align_dataset_xy(config_path,
     main_dir        = main_config['main_dir']
     output_path     = main_config['output_path']
     resolution      = main_config['resolution']
+    offset          = main_config['offset']
     scale           = main_config['scale']
     stride          = main_config['stride']
     overlap         = main_config['overlap']
@@ -87,6 +73,7 @@ def align_dataset_xy(config_path,
                        tile_maps_paths,
                        tile_maps_invert,
                        resolution,
+                       offset,
                        stride,
                        overlap,
                        scale,

@@ -19,7 +19,7 @@ from emalign.utils.stacks import Stack
 from emalign.utils.io import *
 from emalign.utils.align_xy import *
 from emalign.utils.inspect import *
-
+from emalign.utils.tile_map_positions import estimate_tile_map_positions
 
 logging.basicConfig(level=logging.INFO)
 logging.getLogger('absl').setLevel(logging.WARNING)
@@ -56,11 +56,11 @@ def get_stacks(stack_paths, invert_instructions):
 
     new_stacks = {}
     for group, group_df in df.groupby('group'):    
-        stack_name = group_df.stack_name.iloc[0]
+        stack_names = group_df.stack_name.iloc[0]
 
-        if len(stack_name) == 1:
+        if len(stack_names) == 1:
             # Stack name becomes name + group (gives an idea of order too)
-            new_stack_name = str(group).zfill(2) + '_' + stack_name[0]
+            new_stack_name = str(group).zfill(2) + '_' + stack_names[0]
 
             tile_map = {}
             for z in group_df.z:
@@ -69,15 +69,15 @@ def get_stacks(stack_paths, invert_instructions):
             stack = Stack()
             stack.stack_name = new_stack_name
             stack._set_tilemaps_paths(tile_map)
-            stack.tile_maps_invert = {k: invert_instructions[stack_name[0]] for k in tile_map[z].keys()}
+            stack.tile_maps_invert = {k: invert_instructions[stack_names[0]] for k in tile_map[z].keys()}
 
             new_stacks[new_stack_name] = stack
         
-        elif len(stack_name) == 2:
-            combined_stack_name = '_'.join([str(group).zfill(2)] + stack_name)
+        else:
+            combined_stack_name = '_'.join([str(group).zfill(2)] + stack_names)
             pair = []
-            for i in range(2):
-                new_stack_name = str(group).zfill(2) + '_' + stack_name[i]
+            for i in range(len(stack_names)):
+                new_stack_name = str(group).zfill(2) + '_' + stack_names[i]
                 
                 tile_map = {}
                 for z in group_df.z:
@@ -86,14 +86,26 @@ def get_stacks(stack_paths, invert_instructions):
                 stack = Stack()
                 stack.stack_name = new_stack_name
                 stack._set_tilemaps_paths(tile_map)
-                stack.tile_maps_invert = {k: invert_instructions[stack_name[i]] for k in tile_map[z].keys()}
+                stack.tile_maps_invert = {k: invert_instructions[stack_names[i]] for k in tile_map[z].keys()}
 
                 pair.append(stack)
             new_stacks[combined_stack_name] = pair
-        elif len(stack_name) > 2:
-            raise RuntimeError('Dealing with more than 2 stacks overlapping has not been implemented yet')
         
     return new_stacks
+
+
+def find_offset_from_previous(main_config_path):
+    with open(main_config_path, 'r') as f:
+        main_config = json.load(f)
+
+    z_offsets = []
+    for stack_config in main_config['stack_configs'].values():
+        with open(stack_config, 'r') as f:
+            stack_config = json.load(f)
+        
+        z_offsets.append(stack_config['z_end'])
+
+    return max(z_offsets) + 1
 
 
 def prep_align_stacks(main_dir,
@@ -107,6 +119,7 @@ def prep_align_stacks(main_dir,
                       scale,
                       apply_gaussian,
                       apply_clahe,
+                      prev_cfg,
                       num_workers,
                       port):
     
@@ -117,6 +130,10 @@ def prep_align_stacks(main_dir,
     if os.path.exists(os.path.join(config_dir, 'main_config.json')):
         logging.info('Config already exists in dir, exiting process...')
         sys.exit()
+
+    if prev_cfg is not None:
+        offset[0] = find_offset_from_previous(prev_cfg)
+        logging.info(f'Determined z offset from previous dataset: {offset[0]}')
 
     # Find tilesets with desired resolution
     logging.info(f'Looking for tilesets in: {main_dir}')
@@ -133,27 +150,24 @@ def prep_align_stacks(main_dir,
     stacks = get_stacks(stack_paths, invert_instructions)
 
     # Look for overlapping stacks
-    stack_pairs = {k:v for k,v in stacks.items() if isinstance(v, list)}
+    combined_stacks = {k:v for k,v in stacks.items() if isinstance(v, list)}
     stacks = [v for k,v in stacks.items() if not isinstance(v, list)]
 
-    logging.info(f'Found {len(stack_pairs)} stack pairs')
-    combined_stacks = []
-    if len(stack_pairs) > 0:
-        logging.info('Checking pairs of overlapping stacks')
+    logging.info(f'Found {len(combined_stacks)} combined stack')
+    processed_combined_stacks = []
+    if len(combined_stacks) > 0:
+        logging.info('Checking groups of overlapping stacks')
         # Overlapping stacks were found, figure out overlapping regions
-        for name_combined_stack, pair in stack_pairs.items():
-            stack_1, stack_2 = pair
+        for name_combined_stack, combined_stack in combined_stacks.items():
             # Detect overlapping regions
-            combined_stack = check_combined_stacks(stack_1, 
-                                                   stack_2, 
-                                                   overlap, 
-                                                   apply_gaussian, 
-                                                   apply_clahe, 
-                                                   scale,
-                                                   resolution,
-                                                   port)
+            remapped_tile_map, remapped_tile_invert = estimate_tile_map_positions(combined_stack, apply_gaussian, apply_clahe, scale=0.3)
+
+            combined_stack = Stack()
             combined_stack.stack_name = name_combined_stack
-            combined_stacks.append(combined_stack)
+            combined_stack._set_tilemaps_paths(remapped_tile_map)
+            combined_stack.tile_maps_invert = remapped_tile_invert
+
+            processed_combined_stacks.append(combined_stack)
 
     logging.info('Writing stack configs')
     config_paths = {}
@@ -168,13 +182,13 @@ def prep_align_stacks(main_dir,
                         'tile_maps': json_tile_maps,
                         'tile_maps_invert': {str(k):v for k,v in stack.tile_maps_invert.items()},
                         }
-        config_path = os.path.join(config_dir, stack.stack_name + '.json')
+        config_path = os.path.join(config_dir, 'xy_' + stack.stack_name + '.json')
         config_paths.update({stack.stack_name: os.path.abspath(config_path)})      
 
         with open(config_path, 'w') as f:
             json.dump(config_stack, f, indent='')
 
-    for stack in combined_stacks:
+    for stack in processed_combined_stacks:
         json_tile_maps = {}
         for z, tile_map in stack.slice_to_tilemap.items():
             json_tile_maps[str(z)] = {str(k):v for k,v in tile_map.items()}
@@ -197,7 +211,7 @@ def prep_align_stacks(main_dir,
                 'project_name': project_name,
                 'main_dir': os.path.abspath(main_dir),
                 'stack_configs': config_paths,
-                'tilesets_combined': len(stack_pairs),
+                'tilesets_combined': len(combined_stacks),
                 'resolution': resolution,
                 'offset': offset,
                 'output_path': os.path.abspath(output_path),
@@ -302,6 +316,13 @@ if __name__ == '__main__':
                         type=int,
                         default=33333,
                         help='Port used by neuroglancer')
+    parser.add_argument('--prev-cfg',
+                        metavar='PREV_CFG',
+                        dest='prev_cfg',
+                        default=None,
+                        type=str,
+                        help='Path to the main_config of a previous part of the dataset. If provided, the z offset will be determined from the previous dataset.')
+    
     args=parser.parse_args()
 
 
@@ -312,4 +333,4 @@ if __name__ == '__main__':
         sys.exit()
     print(f'Available GPU IDs: {GPU_ids}')
 
-    prep_align_stacks(**vars(args))    
+    prep_align_stacks(**vars(args)) 

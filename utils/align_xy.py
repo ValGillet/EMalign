@@ -42,14 +42,12 @@ def rescale_mesh(mesh, scale):
 
 
 def get_coarse_offset(tile_map, 
+                      tile_space,
                       overlap=0.15,
                       filter_size=5):
     '''
     Compute coarse offset and mesh for initial rigid XY alignment
     '''
-    
-    tile_space = (np.array(list(tile_map.keys()))[:,1].max()+1, 
-                  np.array(list(tile_map.keys()))[:,0].max()+1)
     
     if overlap < 1:
         overlap = np.round(np.array(tile_map[0,0].shape) * overlap).astype(int)
@@ -60,9 +58,17 @@ def get_coarse_offset(tile_map,
     cx, cy = stitch_rigid.compute_coarse_offsets(tile_space, tile_map, 
                                                  overlaps_xy=((10,overlap[1]),(10,overlap[0])),
                                                  filter_size=filter_size)
+    
+    # Figure out offset from neighbors if missing
+    cx = stitch_rigid.interpolate_missing_offsets(cx, -1)
+    cy = stitch_rigid.interpolate_missing_offsets(cy, -2)
+    cx[np.isinf(cx)] = np.nan
+    cy[np.isinf(cy)] = np.nan
+
     coarse_mesh = stitch_rigid.optimize_coarse_mesh(cx, cy)
 
     return cx, cy, coarse_mesh
+            
 
 
 def get_elastic_mesh(tile_map, 
@@ -118,7 +124,13 @@ def get_elastic_mesh(tile_map,
     # case you might want use aggressive flow filtering to ensure that there are no
     # inaccurate flow vectors). Lower ratios will reduce deformation, which, depending
     # on the initial state of the tiles, might result in visible seams.
-    config = mesh.IntegrationConfig(dt=0.001, gamma=0., k0=0.01, k=0.1, stride=(stride, stride),
+    k0 = 0.01 # inter-section springs (elasticity)
+    # High k0 results in images that tend to "fold" onto themselves
+
+    k = 0.1 # intra-section springs (elasticity)
+    gamma = 0 # dampening factor
+
+    config = mesh.IntegrationConfig(dt=0.001, gamma=gamma, k0=k0, k=k, stride=(stride, stride),
                                     num_iters=1000, max_iters=20000, stop_v_max=0.001,
                                     dt_max=100, prefer_orig_order=True,
                                     start_cap=0.1, final_cap=10., remove_drift=True)
@@ -128,3 +140,46 @@ def get_elastic_mesh(tile_map,
     meshes = {idx_to_key[i]: np.array(x[:, i:i+1 :, :]) for i in range(x.shape[1])}
     
     return meshes
+
+
+
+def compute_coarse_offset_sift(tile_space, tile_map, overlap):
+    conn_x = np.full((2, 1, tile_space[0], tile_space[1]), np.nan)
+    axis = 0
+    for x in range(0, tile_space[1] - 1):
+        for y in range(0, tile_space[0]):
+            if not ((x, y) in tile_map and (x + 1, y) in tile_map):
+                continue
+
+            left = tile_map[(x, y)]
+            right = tile_map[(x + 1, y)]
+
+            offset = estimate_transform_sift(right[:, :overlap[1]], left[:, -overlap[1]:], 0.5)[0]
+
+            if offset is None:
+                offset = [np.inf, np.inf]
+            else:
+                offset[axis] -= overlap[1]
+
+            conn_x[:, 0, y, x] = offset
+
+    conn_y = np.full((2, 1, tile_space[0], tile_space[1]), np.nan)
+    axis = 1
+    for y in range(0, tile_space[0] - 1):
+        for x in range(0, tile_space[1]):
+            if not ((x, y) in tile_map and (x, y + 1) in tile_map):
+                continue
+
+            top = tile_map[(x, y)]
+            bot = tile_map[(x, y + 1)]
+
+            offset = estimate_transform_sift(bot[:overlap[0], :], top[-overlap[0]:, :], 0.5)[0]
+            
+            if offset is None:
+                offset = [np.inf, np.inf]
+            else:
+                offset[axis] -= overlap[0]
+
+            conn_y[:, 0, y, x] = offset
+
+

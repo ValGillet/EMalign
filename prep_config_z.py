@@ -6,8 +6,8 @@ from glob import glob
 from time import sleep
 
 from emalign.utils.inspect import *
-from emalign.utils.check_z import align_arrays_z
-from emalign.utils.align_z import compute_datasets_offsets
+from emalign.utils.align_z import compute_datasets_offsets, align_arrays_z
+from emalign.utils.io import get_ordered_datasets
 
 
 logging.basicConfig(level=logging.INFO)
@@ -19,41 +19,55 @@ def prep_config_z(config_path,
                   config_z_path,
                   num_workers, 
                   port):
-
-    with open(config_path, 'r') as f:
-        main_config = json.load(f)
-
+    
     with open(config_z_path, 'r') as f:
         config_z = json.load(f)
 
-    project_name    = main_config['project_name']
-    output_path     = main_config['output_path']
+    dataset_paths = []
+    for config_path in config_paths:
+        with open(config_path, 'r') as f:
+            main_config = json.load(f)
 
-    range_limit     = config_z['range_limit']    
-    filter_size     = config_z['filter_size']    
-    stride          = config_z['stride']
-    patch_size      = config_z['patch_size']      
-    scale_offset    = config_z['scale_offset']        
-    scale_flow      = config_z['scale_flow']    
-    step_slices     = config_z['step_slices']
-    filter_size     = config_z['mask_filter_size']    
-    range_limit     = config_z['mask_range_limit']
+        project_name    = main_config['project_name']
+        output_path     = main_config['output_path']
 
-    destination_path = os.path.join(output_path, project_name)
-    datasets, z_offsets = get_ordered_datasets(output_path, project_name)
+        stride          = config_z['stride']
+        patch_size      = config_z['patch_size']    
+        max_deviation   = config_z['max_deviation']
+        max_magnitude   = config_z['max_magnitude']  
+        scale_offset    = config_z['scale_offset']        
+        scale_flow      = config_z['scale_flow']    
+        step_slices     = config_z['step_slices']
+        filter_size     = config_z['mask_filter_size']    
+        range_limit     = config_z['mask_range_limit']
+        yx_target_resolution = config_z['yx_target_resolution']
+        k0      = config_z['k0'] 
+        k       = config_z['k'] 
+        gamma   = config_z['gamma']
 
-    existing_configs = glob(os.path.join(output_path, 'z_*.json'))
+        destination_path = os.path.join(output_path, project_name)
+        config_dir = os.path.join(os.path.dirname(output_path), 'config')
+        os.makedirs(config_dir, exist_ok=True)
+        
+        dataset_paths += [d for d in glob(os.path.join(output_path, '*/')) if os.path.basename(d[:-1]) != project_name]
+    datasets, z_offsets = get_ordered_datasets(dataset_paths)
+
+    existing_configs = glob(os.path.join(config_dir, 'z_*.json'))
     if len(existing_configs) > 0:
         logging.info('Config already exists in dir, exiting process...')
         sys.exit()
-
+    
+    pad_offset = (500,500)
     offsets = compute_datasets_offsets(datasets, 
                                        z_offsets,
                                        range_limit,
                                        scale_offset, 
                                        filter_size,
                                        step_slices,
+                                       yx_target_resolution,
+                                       pad_offset,
                                        num_workers)
+
     
     reference = None
     first_slice_z = None
@@ -68,9 +82,11 @@ def prep_config_z(config_path,
                 curr = dataset[i].read().result()
             curr = np.pad(curr, np.stack([offset[1:], (0,0)]).T)
             
-            unaligned, aligned = align_arrays_z(reference, curr,
-                                                patch_size, stride,
-                                                scale_flow, filter_size, range_limit, num_workers)
+            unaligned, aligned = align_arrays_z(reference, curr, scale_flow,
+                                                patch_size, stride, max_magnitude, max_deviation,
+                                                filter_size, range_limit, 
+                                                k0, k, gamma,
+                                                num_workers)
 
             aligned_slices.append([unaligned, aligned])
 
@@ -81,16 +97,19 @@ def prep_config_z(config_path,
                   'scale': scale_flow, 
                   'patch_size': patch_size, 
                   'stride': stride, 
+                  'max_deviation': max_deviation,
+                  'max_magnitude': max_magnitude,
+                  'k0': k0,
+                  'k': k,
+                  'gamma': gamma,
                   'filter_size': filter_size,
                   'range_limit': range_limit,
                   'first_slice': first_slice_z,
                   'num_threads': num_workers}
         
         dataset_name = dataset.kvstore.path.split('/')[-2]
-        output_dir = destination_path.rsplit('/', maxsplit=3)[0]
         
-        config_path = os.path.abspath(os.path.join(output_dir, 'z_' + dataset_name + '.json'))
-
+        config_path = os.path.abspath(os.path.join(config_dir, 'z_' + dataset_name + '.json'))
         if reference is None:
             with open(config_path, 'w') as f:
                 json.dump(config, f, indent='')
@@ -134,9 +153,11 @@ def prep_config_z(config_path,
 
                 logging.info('Computing alignment with the new values...')
                 reference, curr = unaligned
-                unaligned, aligned = align_arrays_z(reference, curr,
-                                                    patch_size, stride,
-                                                    scale_flow, filter_size, range_limit, num_workers)
+                unaligned, aligned = align_arrays_z(reference, curr, scale_flow,
+                                                    patch_size, stride, max_magnitude, max_deviation,
+                                                    filter_size, range_limit, 
+                                                    k0, k, gamma,
+                                                    num_workers)
 
         config['stride'] = stride
         config['patch_size'] = patch_size
@@ -169,7 +190,7 @@ if __name__ == '__main__':
     parser=argparse.ArgumentParser('Script aligning tiles in XY based on SOFIMA (Scalable Optical Flow-based Image Montaging and Alignment). \n\
                                     This script was written to match the file structure produced by the ThermoFisher MAPs software.')
     parser.add_argument('-cfg', '--config_path',
-                        metavar='INPUT_DATASET',
+                        metavar='CONFIG_PATH',
                         dest='config_path',
                         required=True,
                         type=str,
