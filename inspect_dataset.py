@@ -24,10 +24,11 @@ def read_data(
                         read=True,
                         dtype=ts.uint8
                         ).result()
-
+    
     if data_range is None:
         data = destination[:].read().result()
     else:
+        data_range[1] = min(data_range[1], destination.domain.exclusive_max[0])
         data = destination[data_range[0]:data_range[1]].read().result()
 
     if not keep_missing:
@@ -86,7 +87,7 @@ def inspect_dataset(
             except:
                 continue
     else:
-        data = {dataset_name: read_data(dataset_path, data_range=None, keep_missing=keep_missing)}
+        data = {dataset_name: read_data(dataset_path, data_range=data_range, keep_missing=keep_missing)}
 
     show_data(data, port=port)
 
@@ -98,13 +99,13 @@ if __name__ == '__main__':
     parser.add_argument('-d', '--dataset-path',
                         metavar='DATASET_PATH',
                         dest='dataset_path',
+                        required=True,
                         type=str,
                         default=None,
                         help='Path to the zarr container containing the final alignment.')
     parser.add_argument('--data-range',
                         metavar='DATA_RANGE',
                         dest='data_range',
-                        required=False,
                         nargs=2,
                         type=int,
                         help='Range of slice indices to show.')

@@ -15,6 +15,7 @@ from emprocess.utils.transform import rotate_image
 from .io import get_data_samples, get_dataset_attributes
 from .arrays import compute_mask, pad_to_shape
 from .offsets import *
+from emalign.utils.tile_map_positions import estimate_transform_sift
 
 
 def get_data(dataset, z, offset, target_scale, rotation_angle=0):
@@ -58,15 +59,16 @@ def compute_datasets_offsets(datasets,
                         for i in range(1, len(data))]
         # Offset between first and last image of the first dataset
         last_inner_offset = np.sum(inner_offsets, axis=0)
-
+        rotation_angle = 0
         for _ in tqdm(range(len(fs)),
                       desc=f'Calculating offset between {len(datasets)} datasets.'):
             # Reference is the latest image before the current dataset
-            prev = data[-1]
+            prev = rotate_image(data[-1], rotation_angle)
             data = fs.pop().result()
 
+            _, rotation_angle, _ = estimate_transform_sift(prev, data[0], 0.3)
             # Calculate offset to the last stack 
-            offset_to_last, _ = estimate_rough_z_offset(prev, data[0], scale=scale, range_limit=range_limit, filter_size=filter_size)
+            offset_to_last, _ = estimate_rough_z_offset(prev, rotate_image(data[0], rotation_angle), scale=scale, range_limit=range_limit, filter_size=filter_size)
             offsets_yx.append(offset_to_last + last_inner_offset)
 
             # Offset between first and last image (to account for differences between first images of different stacks and drift)

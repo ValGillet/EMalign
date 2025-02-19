@@ -118,14 +118,21 @@ def align_stack_z(destination_path,
         # Get slice without offset because we want to apply a rotation before applying the offset
         # Based on intuition, I have not tested whether that made a difference
         test_slice = get_data(dataset, 0, [0,0,0], target_scale, rotation_angle=0)
-        _, rotation_angle, _ = estimate_transform_sift(first_slice, test_slice, 0.3)
+        sift_offset, rotation_angle, _ = estimate_transform_sift(first_slice, test_slice, 0.3)
+        print(-sift_offset)
+        print(rotation_angle)
         test_slice = rotate_image(test_slice, rotation_angle)
-        
-        yx_offset = estimate_rough_z_offset(first_slice, test_slice, scale=0.1, range_limit=10)[0]        
-        assert not np.isnan(yx_offset).any(), f'Images might not overlap enough. Is there too much padding following a rotation? ({rotation_angle})'
-        assert np.all(yx_offset > 0), f'Offset should be positive ({offset}). Did the images drift over time?'
+        sift_offset, _, _ = estimate_transform_sift(first_slice, test_slice, 0.3)
+        sift_offset = -sift_offset.astype(int)[::-1]
+        print(sift_offset)
+        # yx_offset = estimate_rough_z_offset(first_slice, test_slice, scale=0.1, range_limit=10)[0]     
+        # if np.isnan(yx_offset).any():
+        #     yx_offset = -sift_offset.astype(int)[::-1]
 
-        offset[1:] = np.array(yx_offset).astype(int)
+        assert not np.isnan(sift_offset).any(), f'Images might not overlap enough. Is there too much padding following a rotation? ({rotation_angle})'
+        assert np.all(sift_offset > 0), f'Offset should be positive ({sift_offset}). Did the images drift over time?'
+
+        offset[1:] = sift_offset
     else:
         rotation_angle=0
         

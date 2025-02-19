@@ -53,6 +53,7 @@ def align_stack_xy(output_path,
 
     z_offset = min(stack.slices)
     z_shape  = max(stack.slices)-min(stack.slices)
+    offset[0] = z_offset
 
     # Skip if already fully processed
     #if os.path.exists(attrs_path):
