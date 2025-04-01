@@ -190,15 +190,18 @@ def get_data_samples(dataset, step_slices, yx_target_resolution):
 
 def render_slice_xy(dest, z, tile_map, meshes, stride, tile_masks=None, return_render=False, parallelism=1, **kwargs):
     try:
-        stitched, _ = warp.render_tiles(tile_map, meshes, tile_masks=tile_masks, parallelism=parallelism, stride=(stride, stride), **kwargs)
+        if len(tile_map) > 1:
+            img, _ = warp.render_tiles(tile_map, meshes, tile_masks=tile_masks, parallelism=parallelism, stride=(stride, stride), **kwargs)
+        else:
+            img = list(tile_map.values())[0]
         
         if return_render:
-            return stitched
+            return img
         else:
-            y,x = stitched.shape
+            y,x = img.shape
             if np.any(dest.domain.exclusive_max[1:] < np.array([y, x])):
                 dest = dest.resize(exclusive_max=[None, y, x], expand_only=True).result()
-            dest[z:z+1, :y, :x].write(stitched).result()
+            dest[z:z+1, :y, :x].write(img).result()
             return True
     except Exception as e:
         logging.error(f'Error in render_slice: {e}')
