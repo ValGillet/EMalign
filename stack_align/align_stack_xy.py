@@ -56,9 +56,9 @@ def align_stack_xy(output_path,
     offset[0] = z_offset
 
     # Skip if already fully processed
-    #if os.path.exists(attrs_path):
-     #   logging.info(f'Skipping {stack.stack_name} because it was already processed.')
-      #  return False
+    if os.path.exists(attrs_path):
+       logging.info(f'Skipping {stack.stack_name} because it was already processed.')
+       return False
 
     dataset = ts.open({'driver': 'zarr',
                         'kvstore': {
@@ -79,20 +79,6 @@ def align_stack_xy(output_path,
     #####################
     ### PROCESS STACK ###
     #####################
-    # fs_read = []
-    # fs_warp = []
-    # with futures.ThreadPoolExecutor(num_threads) as tpe:
-    #     for z in stack.slices:
-    #         fs_read.append(tpe.submit(load_tilemap, 
-    #                                     {z: stack.slice_to_tilemap[z]}, 
-    #                                     stack.tile_maps_invert,
-    #                                     apply_gaussian, 
-    #                                     apply_clahe,
-    #                                     scale))
-
-        # # Process tilemaps synchronously because functions use JAX and GPU (have not tested though)
-        # for f in tqdm(futures.as_completed(fs_read), total=len(fs_read), 
-        #               position=2, desc=f'{stack.stack_name}: Computing elastic meshes', leave=False):
     pbar = tqdm(stack.slices, position=2, desc=f'{stack.stack_name}: Processing', leave=False)
     for z in pbar:
         pbar.set_description(f'{stack.stack_name}: Loading tile_map...')
@@ -104,53 +90,60 @@ def align_stack_xy(output_path,
 
         tile_space = (np.array(list(tile_map.keys()))[:,1].max()+1, 
                         np.array(list(tile_map.keys()))[:,0].max()+1)
+        
+        if np.any(np.array(tile_space) > 1):
+            # Pad tiles so they are all the same shape (required by sofima)
+            max_shape = np.max([t.shape for t in tile_map.values()],axis=0)
 
-        # Pad tiles so they are all the same shape (required by sofima)
-        max_shape = np.max([t.shape for t in tile_map.values()],axis=0)
+            tile_masks = {}
+            for k in sorted(tile_map): 
+                tile = tile_map[k]
+                mask = np.ones_like(tile)
 
-        tile_masks = {}
-        for k in sorted(tile_map): 
-            tile = tile_map[k]
-            mask = np.ones_like(tile)
+                if np.any(np.array(tile.shape) != max_shape):
+                    d = k[::-1] == (np.array(tile_space) - 1)
+                    d[1] = np.logical_not(d[1])
 
-            if np.any(np.array(tile.shape) != max_shape):
-                d = k[::-1] == (np.array(tile_space) - 1)
-                d[1] = np.logical_not(d[1])
-
-                tile = pad_to_shape(tile, max_shape, d.astype(int))
-                mask = pad_to_shape(mask, max_shape, d.astype(int))
+                    tile = pad_to_shape(tile, max_shape, d.astype(int))
+                    mask = pad_to_shape(mask, max_shape, d.astype(int))
+                
+                tile_map[k] = tile
+                tile_masks[k] = mask
             
-            tile_map[k] = tile
-            tile_masks[k] = mask
-        
-        pbar.set_description(f'{stack.stack_name}: Computing elastic meshes...')
-        cx, cy, coarse_mesh = get_coarse_offset(tile_map, 
-                                                tile_space,
-                                                overlap=overlap)                    
-        
-        meshes = get_elastic_mesh(tile_map, 
-                                    cx, 
-                                    cy, 
-                                    coarse_mesh,
-                                    stride)
-        
-        # Ensure that first tiles acquired are rendered last because they are sharper and should be on top
-        meshes = {k:meshes[k] for k in sorted(meshes)[::-1]}
+            pbar.set_description(f'{stack.stack_name}: Computing elastic meshes...')
+            cx, cy, coarse_mesh, forced = get_coarse_offset(tile_map, 
+                                                            tile_space,
+                                                            overlap=overlap,
+                                                            force=True)
+
+            if forced:
+                # Coarse offset computation had to be forced because there is little overlap
+                # It will take slightly longer but we need to go with smaller stride/patch_size
+                meshes = get_elastic_mesh(tile_map, 
+                                          cx, 
+                                          cy, 
+                                          coarse_mesh,
+                                          stride=10,
+                                          patch_size=20)
+            else:
+                meshes = get_elastic_mesh(tile_map, 
+                                          cx, 
+                                          cy, 
+                                          coarse_mesh,
+                                          stride)
+            
+            # Determine margin by finding the minimum displacement in X or Y between adjacent tiles
+            # Margin is how many pixels to ignore from the tiles when rendering. Too high leaves a delimitation, too low leaves a gap
+            min_displacement = np.abs(np.concatenate([cx[0,0,0,:][~np.isnan(cx[0,0,0,:])], 
+                                                    cy[1,0,0,:][~np.isnan(cy[1,0,0,:])]])).min()
+            margin = max(int(min_displacement // 2 - 5), 1)
+            
+            # Ensure that first tiles acquired are rendered last because they are sharper and should be on top
+            meshes = {k:meshes[k] for k in sorted(meshes)[::-1]}
 
         pbar.set_description(f'{stack.stack_name}: Rendering...')
-        render_slice_xy(dataset, z-z_offset, tile_map, meshes, stride, tile_masks, parallelism=num_threads)
+        render_slice_xy(dataset, z-z_offset, tile_map, meshes, stride, tile_masks, parallelism=num_threads, margin=margin)
 
-            # ProcessPoolExecutor is faster for CPU intensive tasks
-            # fs_warp.append(tpe.submit(render_slice_xy, dataset, z-z_offset, tile_map, meshes, stride, tile_masks))
-
-        # Wait for processes to finish
-        # pbar = tqdm(futures.as_completed(fs_warp), 
-        #             total=len(fs_warp), 
-        #             position=2, 
-        #             desc=f'{stack.stack_name}: Stitching and writing tiles', 
-        #             leave=True)
-        # for f in pbar:
-        #     f.result()
     pbar.set_description(f'{stack.stack_name}: done')
 
     # Attributes are ZYX coordinates
