@@ -1,9 +1,12 @@
 import numpy as np
+import cv2
 
 from cv2 import resize
 from sofima import stitch_rigid, flow_field
+from emprocess.utils.img_proc import downsample
 
 from .arrays import *
+
 
 def xy_offset_to_pad(offset):
     pad = np.zeros([2,2], dtype=int)
@@ -80,3 +83,47 @@ def estimate_rough_z_offset(img1, img2, scale=0.1, range_limit=10, filter_size=5
     ).squeeze()
 
     return np.array([yo, xo])/scale, pr
+
+
+def estimate_transform_sift(img1, img2, scale=1, return_homography=False):
+
+    '''
+    Estimate transformation (xy offset and rotation) from img2 to img1
+    '''
+
+    # Downsample images for faster computations
+    ds_img1 = downsample(img1, scale)
+    ds_img2 = downsample(img2, scale)
+
+    # Find keypoints using SIFT
+    sift = cv2.SIFT_create()
+    kp1, des1 = sift.detectAndCompute(ds_img1,None)
+    kp2, des2 = sift.detectAndCompute(ds_img2,None)
+
+    # Match keypoints to each other
+    # Brute force matchers is slower than flann, but it is exact
+    bf = cv2.BFMatcher()
+    matches = bf.knnMatch(des1,des2,k=2)
+
+    good = []
+    for m,n in matches:
+        if m.distance < 0.7*n.distance:
+            good.append(m)
+
+    src_pts = np.float32([kp1[m.queryIdx].pt for m in good]).reshape(-1,1,2)
+    dst_pts = np.float32([kp2[m.trainIdx].pt for m in good]).reshape(-1,1,2)
+
+    # Estimate affine transformation matrix
+    M, _ = cv2.estimateAffinePartial2D(src_pts, dst_pts)
+
+    # Extract translation offsets
+    xy_offset = M[:, 2]
+
+    # Extract rotation angle in degrees
+    theta = np.degrees(np.arctan2(M[1, 0], M[0, 0]))
+    
+    # Offset in pixels, rotation before transform
+    if return_homography:
+        return M, xy_offset/scale, theta
+    else:
+        return xy_offset/scale, theta
