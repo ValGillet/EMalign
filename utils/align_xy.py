@@ -124,7 +124,7 @@ def get_coarse_offset(tile_map,
     cy[np.isinf(cy)] = np.nan
 
     if np.all(np.isnan(cx) | np.isinf(cx)) & np.all(np.isnan(cy) | np.isinf(cy)) & force:
-        cx, cy = force_compute_coarse_offsets(tile_space, tile_map, overlap=overlap)
+        cx, cy = force_compute_coarse_offsets(tile_space, tile_map, overlap=100)
         forced = True
     else:
         forced = False
