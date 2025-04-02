@@ -38,10 +38,59 @@ def align_stack_xy(output_path,
                    offset,
                    stride,
                    overlap,
-                   scale,
                    apply_gaussian,
                    apply_clahe,
-                   num_threads):
+                   num_cores):
+    
+    '''
+    Align and stitch image stack in XY. 
+
+    Args:
+
+        output_path (``str``):
+
+            Path to the zarr container where the stack will be written.
+
+        stack_name (``str``):
+
+            Name of the stack. Will be used as the dataset name in the destination zarr container. 
+
+        tile_maps_paths (``dict``):
+
+            Dictionnary of slices to dictionnary of tile grid positions to paths of tifs.
+
+        tile_maps_invert (``dict``):
+
+            Dictionnary of tile grid positions to boolean, describing whether tiles need to be inverted at that position. 
+
+        resolution (list of ``int``):
+
+            List of 2 int corresponding to the YX resolution in nanometers.
+
+        offset (list of ``int``):
+
+            List of 3 int corresponding to the ZYX offset of the stack in voxels.
+
+        stride (``int``):
+
+            YX stride for computing the elastic mesh, in pixels. 
+
+        overlap (``int`` or ``float``):
+
+            Overlap between tiles. If a float between 0 and 1 is given, it will be considered a ratio of the tile shape. 
+
+        apply_gaussian (``bool``):
+
+            Whether to apply a gaussian filter to tiles for denoising.
+
+        apply_clahe (``bool``):
+
+            Whether to apply CLAHE to tiles to enhance contrast.
+
+        num_cores (``int``):
+
+            Number of CPUs to use for rendering stitched images.
+    '''
     
     stack = Stack(stack_name=stack_name, 
                   tile_maps_paths=tile_maps_paths, 
@@ -86,12 +135,13 @@ def align_stack_xy(output_path,
                                         stack.tile_maps_invert,
                                         apply_gaussian, 
                                         apply_clahe,
-                                        scale)
+                                        1)
 
         tile_space = (np.array(list(tile_map.keys()))[:,1].max()+1, 
-                        np.array(list(tile_map.keys()))[:,0].max()+1)
+                      np.array(list(tile_map.keys()))[:,0].max()+1)
         
         if np.any(np.array(tile_space) > 1):
+            # There are more than one tiles
             # Pad tiles so they are all the same shape (required by sofima)
             max_shape = np.max([t.shape for t in tile_map.values()],axis=0)
 
@@ -125,24 +175,29 @@ def align_stack_xy(output_path,
                                           coarse_mesh,
                                           stride=10,
                                           patch_size=20)
+                render_stride = 10
             else:
                 meshes = get_elastic_mesh(tile_map, 
                                           cx, 
                                           cy, 
                                           coarse_mesh,
                                           stride)
+                render_stride = stride
             
             # Determine margin by finding the minimum displacement in X or Y between adjacent tiles
             # Margin is how many pixels to ignore from the tiles when rendering. Too high leaves a delimitation, too low leaves a gap
             min_displacement = np.abs(np.concatenate([cx[0,0,0,:][~np.isnan(cx[0,0,0,:])], 
-                                                    cy[1,0,0,:][~np.isnan(cy[1,0,0,:])]])).min()
+                                                      cy[1,0,0,:][~np.isnan(cy[1,0,0,:])]])).min()
             margin = max(int(min_displacement // 2 - 5), 1)
             
             # Ensure that first tiles acquired are rendered last because they are sharper and should be on top
             meshes = {k:meshes[k] for k in sorted(meshes)[::-1]}
-
-        pbar.set_description(f'{stack.stack_name}: Rendering...')
-        render_slice_xy(dataset, z-z_offset, tile_map, meshes, stride, tile_masks, parallelism=num_threads, margin=margin)
+            pbar.set_description(f'{stack.stack_name}: Rendering...')
+            render_slice_xy(dataset, z-z_offset, tile_map, meshes, render_stride, tile_masks, parallelism=num_cores, margin=margin)
+        else:
+            # There is only one tile, no need to compute anything
+            pbar.set_description(f'{stack.stack_name}: Writing unique tile...')
+            render_slice_xy(dataset, z-z_offset, tile_map, None, None, None, parallelism=num_cores)
 
     pbar.set_description(f'{stack.stack_name}: done')
 
@@ -162,7 +217,7 @@ if __name__ == '__main__':
 
     config_path = sys.argv[1]
     stack_name  = sys.argv[2]
-    num_threads = int(sys.argv[3])
+    num_cores = int(sys.argv[3])
 
     with open(config_path, 'r') as f:
         main_config = json.load(f)
@@ -171,7 +226,6 @@ if __name__ == '__main__':
     output_path     = main_config['output_path']
     resolution      = main_config['resolution']
     offset          = main_config['offset']
-    scale           = main_config['scale']
     stride          = main_config['stride']
     overlap         = main_config['overlap']
     apply_gaussian  = main_config['apply_gaussian']
@@ -188,7 +242,6 @@ if __name__ == '__main__':
                    offset,
                    stride,
                    overlap,
-                   scale,
                    apply_gaussian,
                    apply_clahe,
-                   num_threads)
+                   num_cores)
