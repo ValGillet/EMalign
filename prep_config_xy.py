@@ -158,16 +158,14 @@ def prep_align_stacks(main_dir,
     if len(combined_stacks) > 0:
         logging.info('Checking groups of overlapping stacks')
         # Overlapping stacks were found, figure out overlapping regions
-        for name_combined_stack, combined_stack in combined_stacks.items():
+        for combined_stack in combined_stacks.values():
             # Detect overlapping regions
-            remapped_tile_map, remapped_tile_invert = estimate_tile_map_positions(combined_stack, apply_gaussian, apply_clahe, scale=0.3)
-
-            combined_stack = Stack()
-            combined_stack.stack_name = name_combined_stack
-            combined_stack._set_tilemaps_paths(remapped_tile_map)
-            combined_stack.tile_maps_invert = remapped_tile_invert
-
-            processed_combined_stacks.append(combined_stack)
+            processed_combined_stacks += estimate_tile_map_positions(combined_stack, 
+                                                                     apply_gaussian, 
+                                                                     apply_clahe, 
+                                                                     scale=[0.3, 0.5], 
+                                                                     overlap_score_threshold=0.8,
+                                                                     rotation_threshold=5)
 
     logging.info('Writing stack configs')
     config_paths = {}
@@ -303,7 +301,7 @@ if __name__ == '__main__':
                         action='store_false',
                         default=True,
                         help='Don\'t apply CLAHE to images before alignment.') 
-    parser.add_argument('--dir_pattern',
+    parser.add_argument('--dir-pattern',
                         metavar='DIR_PATTERN',
                         dest='dir_pattern',
                         nargs=1,

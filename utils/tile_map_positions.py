@@ -4,104 +4,145 @@ import numpy as np
 import cv2
 import logging
 from tqdm import tqdm
+from itertools import combinations
 
-from emprocess.utils.img_proc import downsample
+from emprocess.utils.transform import rotate_image
 from emalign.utils.io import load_tilemap
+from emalign.utils.stacks import Stack
+from emalign.utils.offsets import estimate_transform_sift, xy_offset_to_pad
+from emalign.utils.arrays import pad_to_shape
 
 logging.basicConfig(level=logging.INFO)
 
 
-# TODO:
-# Figure out amount of overlap between tiles from pixel offset
+def get_overlap(img1, img2, xy_offset, rotation_angle):
 
+    '''
+    Extract overlapping parts of two images based on an offset and rotation from img2 to img1.
+    '''
 
-def estimate_transform_sift(img1, img2, scale=1):
+    # Estimate overlap
+    # Masks and images are padded to same shape to facilitate comparison
+    # I'm sure there is a smartest way but this works
+    mask1 = np.ones_like(img1)
+    mask1 = rotate_image(img1, -rotation_angle)
+    img1 = rotate_image(img1, -rotation_angle)
 
-    ds_img1 = downsample(img1, scale)
-    ds_img2 = downsample(img2, scale)
+    mask2 = np.ones_like(img2).astype(bool)
+    img1=np.pad(img1, xy_offset_to_pad(-xy_offset))
+    img2=np.pad(img2, xy_offset_to_pad(xy_offset))
 
-    sift = cv2.SIFT_create()
+    mask1=np.pad(mask1, xy_offset_to_pad(-xy_offset))
+    mask2=np.pad(mask2, xy_offset_to_pad(xy_offset))
+
+    max_shape = np.max([img1.shape, img2.shape], axis=0)
+
+    img1 = pad_to_shape(img1, max_shape)
+    img2 = pad_to_shape(img2, max_shape)
+    mask1 = pad_to_shape(mask1, max_shape)
+    mask2 = pad_to_shape(mask2, max_shape)
     
-    # find the keypoints and descriptors with SIFT
-    kp1, des1 = sift.detectAndCompute(ds_img1,None)
-    kp2, des2 = sift.detectAndCompute(ds_img2,None)
+    mask = mask1.astype(bool) & mask2.astype(bool)
+
+    if mask.any():
+        y1,x1 = np.min(np.where(mask), axis=1) 
+        y2,x2 = np.max(np.where(mask), axis=1) 
+
+        return img1[y1:y2, x1:x2], img2[y1:y2, x1:x2], mask[y1:y2, x1:x2]
+    else:
+        return None
     
-    FLANN_INDEX_KDTREE = 1
-    index_params = dict(algorithm = FLANN_INDEX_KDTREE, trees = 5)
-    search_params = dict(checks = 50)
 
-    flann = cv2.FlannBasedMatcher(index_params, search_params)
+def compute_laplacian_var_diff(overlap_1, overlap_2, mask):
+
+    '''
+    Compute a metric ([0,1]) describing how well two arrays overlap, based on laplacian filter.
+    If score is 1, overlapping regions have the same edge content and therefore overlap well.
+    '''
     
-    if des1 is None or des2 is None:
-        return None, None, 0
+    mask = np.ones_like(overlap_1).astype(bool) if mask is None else mask
+
+    laplacian1 = cv2.Laplacian(overlap_1, cv2.CV_64F)[mask]
+    laplacian2 = cv2.Laplacian(overlap_2, cv2.CV_64F)[mask]
+
+    lap_var1 = np.var(laplacian1)
+    lap_var2 = np.var(laplacian2)
+
+    # Calculate an index of difference in edge content (variance of laplacian)
+    # Between 0 and 1, low means exact same content, 1 means different
+    return 1 - abs(lap_var1 - lap_var2) / max(lap_var1, lap_var2)
+
+
+def check_overlap(img1, img2, xy_offset, theta, threshold=0.5, refine=True):
+
+    '''
+    Compute a metric describing how well images overlap, based on a given offset and rotation. 
+    '''
+
+    # Index of sharpness using Laplacian
+    overlap = get_overlap(img1, img2, xy_offset, theta)
+
+    if overlap is not None:
+        overlap1, overlap2, mask = overlap
+
+        lap_variance_diff = compute_laplacian_var_diff(overlap1, overlap2, mask)
+
+        if refine and lap_variance_diff < threshold:
+            logging.debug('Refining overlap estimation...')
+            # Retry the overlap, it can often get better
+            try:
+                xy_offset, theta = estimate_transform_sift(overlap1, overlap2, scale=0.3)
+            except:
+                xy_offset, theta = estimate_transform_sift(overlap1, overlap2, scale=0.5)
+            overlap1, overlap2, mask = get_overlap(overlap1, overlap2, xy_offset, theta)
+            lap_variance_diff = compute_laplacian_var_diff(overlap1, overlap2, mask)
+    else:
+        # Images do not overlap (displacement is larger than image itself)
+        lap_variance_diff = 0
+
+    return lap_variance_diff
+
+
+def get_tile_positions_graph(G):
+
+    '''
+    Find positions of tiles in a graph.
+
+    Args:
+
+        G (``nx.DiGraph``):
+
+            Fully connected directional graph containing tile keys as nodes, relative offset between tiles as edge attributes. 
+
+    '''
     
-    matches = flann.knnMatch(des1,des2,k=2)
-    
-    # store all the good matches as per Lowe's ratio test.
-    good = []
-    for m,n in matches:
-        if m.distance < 0.7*n.distance:
-            good.append(m)
+    if not nx.is_connected(G):
+        raise ValueError('Graph must be fully connected to determine tile positions')
 
-    src_pts = np.float32([ kp1[m.queryIdx].pt for m in good ]).reshape(-1,1,2)
-    dst_pts = np.float32([ kp2[m.trainIdx].pt for m in good ]).reshape(-1,1,2)
-
-    # Estimate affine transformation matrix
-    try:
-        M, mask = cv2.estimateAffinePartial2D(src_pts, dst_pts)
-    except:
-        return None, None, 0    
-    if M is None:
-        return None, None, 0
-    
-    # # Extract translation offsets
-    xy_offset = M[:, 2]
-
-    # # Extract rotation angle in degrees
-    theta = np.degrees(np.arctan2(M[1, 0], M[0, 0]))
-
-    # xy offset is from img2 to img1
-    return xy_offset/scale, theta, mask.sum()
-
-
-def get_tile_positions_connected_graph(G):
     node_positions = {}
 
-    while True:
-        # Not sure if this is necessary, but there might be a possibility to miss a node if it was skipped
-        # I cannot bother checking whether that's truly possible or not
-        for node in G:
-            if len(node_positions) == 0:
-                # If no tile has been processed yet, we assign this one as the reference
-                node_positions[node] = np.array([0,0])
+    node = list(G.nodes)[0]
+    while len(G.nodes) != len(node_positions):
+        if not node_positions:
+            # If no tile has been processed yet, we assign this one as the reference
+            node_positions[node] = np.array([0,0])
 
-            edges = [(u,v,d) for u,v,d in G.edges(data=True) if node in (u,v)]
-
-            if len(edges) == 0:
-                # All its neighbors were processed
-                continue
+        for node in G.neighbors(node):
+            edges = G.edges(node, data=True)
 
             # Iterate over the edges involving this node 
             # and assign a global offset to its neighbor
-            done = []
-            for edge in edges:
-                u, v, attrs = edge
+            for u, v, attrs in edges:
                 rel_offset = attrs['rel_offset']
 
                 if node == u:
                     if u not in node_positions or v in node_positions:
                         continue
-                    node_positions[v] = (node_positions[u] + rel_offset).astype(int)
-                    done.append(True)
+                    node_positions[v] = (node_positions[u] - rel_offset).astype(int)
                 elif node == v:
                     if v not in node_positions or u in node_positions:
                         continue
-                    node_positions[u] = (node_positions[v] + rel_offset).astype(int)
-                    done.append(True)
-        if np.all([node in node_positions for node in G]):
-            break
-        else:
-            logging.DEBUG('Going through graph again')
+                    node_positions[u] = (node_positions[v] - rel_offset).astype(int)
 
     # Bring the smallest offset to (0,0) 
     min_position = np.min(np.stack(list(node_positions.values())), axis=0)
@@ -116,7 +157,47 @@ def get_tile_positions_connected_graph(G):
     return tile_positions
 
 
-def estimate_tile_map_positions(combined_stacks, apply_gaussian, apply_clahe, scale=0.3):
+def estimate_tile_map_positions(combined_stacks, 
+                                apply_gaussian, 
+                                apply_clahe, 
+                                scale=[0.3, 0.5], 
+                                overlap_score_threshold=0.8,
+                                rotation_threshold=5):
+
+    '''
+    Given a list of overlaping image stacks, tries to calculate a transformation between each pair of tiles and check the overlap using a laplacian filter.
+    Based on transformation, tiles are placed on a grid for further processing. Tiles that are found not to overlap well enough are split into multiple stacks.
+
+    
+    Args:
+
+        combined_stacks (`list[Stack]`):
+
+            List of overlapping image stacks.
+
+        apply_gaussian (``bool``):
+
+            Whether or not to apply gaussian filter with default parameters.
+
+        apply_clahe (``bool``):
+
+            Whether or not to apply CLAHE with default parameters.
+
+        scale (`list[float]`):
+
+            Scales to downsample images to for finding transformation with sift (1 = downsampling). 
+            If offset computations fail at scale[0], will try scale[1].
+
+        overlap_score_threshold (``float``):
+         
+            Determines the cutoff for how good overlap needs to be. Based on an index of overlap between 0 (bad) and 1 (perfect).
+
+        rotation_threshold (``int``):
+
+            Determines the maximum allowed rotation in degrees for a tile to be considered overlapping. 
+            Too much rotation will mess with downstream computations for stitching. Will be implemented in the future.
+    '''
+
     unique_slices, counts = np.unique([stack.slices for stack in combined_stacks], return_counts=True)
     z = int(unique_slices[counts == len(combined_stacks)][0])
 
@@ -128,45 +209,68 @@ def estimate_tile_map_positions(combined_stacks, apply_gaussian, apply_clahe, sc
             all_tiles[(stack.stack_name, k)] = v 
 
     overlaps = []
-    for k1 in tqdm(all_tiles.keys(), position=0, desc='Estimating transformation between tiles...'):
-        for k2 in all_tiles.keys():
-            if k1 == k2:
-                continue
-            overlaps.append((k2, k1, *estimate_transform_sift(all_tiles[k1], all_tiles[k2], scale)))
-            # u, v, yx_offset, angle, score
+    for k1, k2 in tqdm(list(combinations(all_tiles.keys(), 2)), position=0, desc='Estimating transformation between tiles...'):
+        if k1[0] == k2[0]:
+            # Same stack, different tiles, we know they overlap
+            relative_offset = np.array(k1[1]) - np.array(k2[1])
+            angle = 0
+            overlap_score = 1
+        else:
+            # Different stacks, they may not overlap
+            img1 = all_tiles[k1]
+            img2 = all_tiles[k2]
+            try:
+                offset, angle = estimate_transform_sift(img1, img2, scale[0])
+            except:
+                offset, angle = estimate_transform_sift(img1, img2, scale[1])
 
+            # Offset of k1 relative to k2
+            relative_offset = np.abs(offset).argsort() * (offset/np.abs(offset)) * np.array([1,-1])
+            overlap_score = check_overlap(img1, img2, 
+                                            offset, angle, 
+                                            threshold=overlap_score_threshold, refine=True)
+
+        overlaps.append((k1, k2, relative_offset, angle, overlap_score))
+        # u, v, relative xy_offset, angle, score
+
+    # Create a graph connecting the different tilesets
     G = nx.Graph()
-    score_threshold = 20
-
     for overlap in overlaps:
         # Offset of k1 relative to k2
-        u, v, offset, angle, score = overlap
-
-        if offset is None:
-            continue
-        offset = -offset
-        relative_offset = np.abs(offset).argsort() * (offset/np.abs(offset)) * np.array([1,-1])
-
-        if score > score_threshold:
-            G.add_edge(u, v, offset=offset, rel_offset=relative_offset)
+        u, v, relative_offset, angle, overlap_score = overlap
+        
+        if overlap_score > overlap_score_threshold and angle < rotation_threshold:
+            # Either the overlap score is good and we can guess position, or we know position because same tileset
+            G.add_edge(u, v, rel_offset=relative_offset)
         
     G.add_nodes_from(list(all_tiles.keys()))
-    if nx.is_connected(G):
-        # All tiles are connected and overlapping
-        logging.info('Figuring out tile positions')
-        tile_positions = get_tile_positions_connected_graph(G)
 
-    remapped_tile_map = defaultdict(dict)
+    logging.info('Figuring out tile positions')
+    new_combined_stacks = []
+    for subG in [G.subgraph(c) for c in nx.connected_components(G)]:
+        tile_positions = get_tile_positions_graph(subG)
 
-    for count, z in zip(counts, unique_slices):
-        for stack in combined_stacks:
-            for old_pos, new_pos in tile_positions[stack.stack_name].items():
-                remapped_tile_map[int(z)][new_pos] = stack.slice_to_tilemap[z][old_pos]
+        remapped_tile_map = defaultdict(dict)
+        remapped_tile_invert = {}
+        for z in unique_slices:
+            for stack in combined_stacks:
+                if stack.stack_name not in tile_positions:
+                    continue
+                for old_pos, new_pos in tile_positions[stack.stack_name].items():
+                    remapped_tile_map[int(z)][new_pos] = stack.slice_to_tilemap[z][old_pos]
+                    # No need to assign tile invert for every slice, but shorter and quick
+                    remapped_tile_invert[new_pos] = stack.tile_maps_invert[old_pos]            
 
-    remapped_tile_invert = {}
+        names = np.unique([n[0] for n in subG.nodes])
+        index = names[0].split('_')[0]
 
-    for stack in combined_stacks:
-        for old_pos, new_pos in tile_positions[stack.stack_name].items():
-            remapped_tile_invert[new_pos] = stack.tile_maps_invert[old_pos]
+        combined_stack = Stack()
+        combined_stack.stack_name = '_'.join([index] + [n.split('_', maxsplit=1)[-1] for n in names])
+        combined_stack._set_tilemaps_paths(remapped_tile_map)
+        combined_stack.tile_maps_invert = remapped_tile_invert
 
-    return remapped_tile_map, remapped_tile_invert
+        new_combined_stacks.append(combined_stack)
+
+    assert sum([len(s.tile_maps_invert.keys()) for s in new_combined_stacks]) == sum([len(s.tile_maps_invert.keys()) for s in combined_stacks])
+
+    return new_combined_stacks
