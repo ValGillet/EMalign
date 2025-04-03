@@ -19,11 +19,11 @@ import tensorstore as ts
 from concurrent import futures
 from tqdm import tqdm
 
-from emalign.utils.stacks import Stack
+from emalign.utils.stacks import Stack, parse_stack_info
 from emalign.utils.io import *
 from emalign.utils.align_xy import *
 from emalign.utils.inspect import *
-from emalign.utils.stacks import parse_stack_info
+from emalign.utils.offsets import estimate_tilemap_overlap
 
 logging.basicConfig(level=logging.INFO)
 logging.getLogger('absl').setLevel(logging.WARNING)
@@ -37,7 +37,7 @@ def align_stack_xy(output_path,
                    resolution,
                    offset,
                    stride,
-                   overlap,
+                   prelim_overlap,
                    apply_gaussian,
                    apply_clahe,
                    num_cores):
@@ -75,9 +75,9 @@ def align_stack_xy(output_path,
 
             YX stride for computing the elastic mesh, in pixels. 
 
-        overlap (``int`` or ``float``):
+        prelim_overlap (``int``):
 
-            Overlap between tiles. If a float between 0 and 1 is given, it will be considered a ratio of the tile shape. 
+            Likely overlap between tiles. Overlap will be finely determined within a window given by this value.
 
         apply_gaussian (``bool``):
 
@@ -123,11 +123,12 @@ def align_stack_xy(output_path,
                         },
                         dtype=ts.uint8, 
                         create=True,
-                        delete_existing=True).result()
-
+                        delete_existing=True).result()   
+    
     #####################
     ### PROCESS STACK ###
     #####################
+    overlap_pad = 50
     pbar = tqdm(stack.slices, position=2, desc=f'{stack.stack_name}: Processing', leave=False)
     for z in pbar:
         pbar.set_description(f'{stack.stack_name}: Loading tile_map...')
@@ -136,11 +137,17 @@ def align_stack_xy(output_path,
                                         apply_gaussian, 
                                         apply_clahe,
                                         1)
-
         tile_space = (np.array(list(tile_map.keys()))[:,1].max()+1, 
                       np.array(list(tile_map.keys()))[:,0].max()+1)
         
-        if np.any(np.array(tile_space) > 1):
+        # Predict the overlap between tiles
+        pbar.set_description(f'{stack.stack_name}: Estimating overlap...')
+        overlap = estimate_tilemap_overlap(tile_space,
+                                           tile_map,
+                                           preliminary_overlap=prelim_overlap,
+                                           scale=[0.3,0.5])
+        
+        if len(tile_map) > 1:
             # There are more than one tiles
             # Pad tiles so they are all the same shape (required by sofima)
             max_shape = np.max([t.shape for t in tile_map.values()],axis=0)
@@ -161,29 +168,30 @@ def align_stack_xy(output_path,
                 tile_masks[k] = mask
             
             pbar.set_description(f'{stack.stack_name}: Computing elastic meshes...')
-            cx, cy, coarse_mesh, forced = get_coarse_offset(tile_map, 
-                                                            tile_space,
-                                                            overlap=overlap,
-                                                            force=True)
+            cx, cy, coarse_mesh = get_coarse_offset(tile_map, 
+                                                    tile_space,
+                                                    overlap=[overlap,               # try first
+                                                             overlap+overlap_pad]   # try second
+                                                   )
 
-            if forced:
-                # Coarse offset computation had to be forced because there is little overlap
-                # It will take slightly longer but we need to go with smaller stride/patch_size
+            patch_size = 160
+            if overlap > patch_size:
                 meshes = get_elastic_mesh(tile_map, 
                                           cx, 
                                           cy, 
                                           coarse_mesh,
-                                          stride=10,
-                                          patch_size=20)
-                render_stride = 10
+                                          stride=stride,
+                                          patch_size=patch_size)
+                render_stride=stride
             else:
                 meshes = get_elastic_mesh(tile_map, 
                                           cx, 
                                           cy, 
                                           coarse_mesh,
-                                          stride)
-                render_stride = stride
-            
+                                          stride=10,
+                                          patch_size=40)
+                render_stride=10
+
             # Determine margin by finding the minimum displacement in X or Y between adjacent tiles
             # Margin is how many pixels to ignore from the tiles when rendering. Too high leaves a delimitation, too low leaves a gap
             min_displacement = np.abs(np.concatenate([cx[0,0,0,:][~np.isnan(cx[0,0,0,:])], 
@@ -227,21 +235,21 @@ if __name__ == '__main__':
     resolution      = main_config['resolution']
     offset          = main_config['offset']
     stride          = main_config['stride']
-    overlap         = main_config['overlap']
+    prelim_overlap  = main_config['overlap']
     apply_gaussian  = main_config['apply_gaussian']
     apply_clahe     = main_config['apply_clahe']
     stack_configs   = main_config['stack_configs']
     
     tile_maps_paths, tile_maps_invert = parse_stack_info(stack_configs[stack_name])
 
-    align_stack_xy(output_path,
-                   stack_name,
-                   tile_maps_paths,
-                   tile_maps_invert,
-                   resolution,
-                   offset,
-                   stride,
-                   overlap,
-                   apply_gaussian,
-                   apply_clahe,
-                   num_cores)
+    align_stack_xy(output_path=output_path,
+                   stack_name=stack_name,
+                   tile_maps_paths=tile_maps_paths,
+                   tile_maps_invert=tile_maps_invert,
+                   resolution=resolution,
+                   offset=offset,
+                   stride=stride,
+                   prelim_overlap=prelim_overlap,
+                   apply_gaussian=apply_gaussian,
+                   apply_clahe=apply_clahe,
+                   num_cores=num_cores)
