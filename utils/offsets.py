@@ -2,7 +2,7 @@ import numpy as np
 import cv2
 
 from cv2 import resize
-from sofima import stitch_rigid, flow_field
+from sofima import flow_field
 from emprocess.utils.img_proc import downsample
 
 from .arrays import *
@@ -25,34 +25,43 @@ def xy_offset_to_pad(offset):
     return pad
 
 
-def estimate_offset_vert(top, bot, overlap):
-    top = top[-overlap:, :]
-    bot = bot[:overlap, :]
+def estimate_tilemap_overlap(tile_space,
+                             tile_map,
+                             preliminary_overlap=500,
+                             scale=[0.3,0.5]):
     
-    # Compensate for difference in shape
-    shape_diff = np.array(top.shape) - np.array(bot.shape)
-    if np.any(shape_diff > 0):
-        bot = np.pad(bot, [(shape_diff[0], 0), (shape_diff[1], 0)])
-    elif np.any(shape_diff < 0):
-        top = np.pad(top, [(abs(shape_diff[0]), 0), (abs(shape_diff[1]), 0)])
+    '''
+    Estimate the overlap between tiles of a tile_map. 
+    Using SIFT for estimate because more consistent results.
+    '''
     
-    xy_offset, _ = stitch_rigid._estimate_offset(top, bot, 0, filter_size=5)
-    return xy_offset, top, bot
+    offsets_x = []
+    for x in range(0, tile_space[1] - 1):
+        for y in range(0, tile_space[0]):
+            left = tile_map[(x,y)] 
+            right = tile_map[(x+1,y)] 
 
+            try:
+                offset, _ = estimate_transform_sift(left[:, -preliminary_overlap:], right[:, :preliminary_overlap], scale[0])
+            except:
+                offset, _ = estimate_transform_sift(left[:, -preliminary_overlap:], right[:, :preliminary_overlap], scale[1])
+            offsets_x.append(offset[0])
 
-def estimate_offset_horiz(left, right, overlap):
-    left = left[:, -overlap:]
-    right = right[:, :overlap]
-    
-    # Compensate for difference in shape
-    shape_diff = np.array(left.shape) - np.array(right.shape)
-    if np.any(shape_diff > 0):
-        right = np.pad(right, [(0, shape_diff[0]), (0, shape_diff[1])])
-    elif np.any(shape_diff < 0):
-        left = np.pad(left, [(0, abs(shape_diff[0])), (0, abs(shape_diff[1]))])
-    
-    xy_offset, _ = stitch_rigid._estimate_offset(left, right, 0, filter_size=5)
-    return xy_offset, left, right
+    offsets_y = []
+    for y in range(0, tile_space[0] - 1):
+        for x in range(0, tile_space[1]):
+            bot = tile_map[(x,y)] 
+            top = tile_map[(x,y+1)] 
+            
+            try:
+                offset, _ = estimate_transform_sift(top[-preliminary_overlap:, :], bot[:preliminary_overlap, :], scale[0])
+            except:
+                offset, _ = estimate_transform_sift(top[-preliminary_overlap:, :], bot[:preliminary_overlap, :], scale[1])
+            offsets_y.append(offset[1])
+
+    overlap_x = preliminary_overlap - np.abs(offsets_x).max() if offsets_x else 0
+    overlap_y = preliminary_overlap - np.abs(offsets_y).max() if offsets_y else 0
+    return int(max(overlap_x, overlap_y))
 
 
 def estimate_rough_z_offset(img1, img2, scale=0.1, range_limit=10, filter_size=5, patch_factor=1): 
