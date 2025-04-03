@@ -76,7 +76,6 @@ def align_dataset_xy(config_path,
                        offset,
                        stride,
                        overlap,
-                       scale,
                        apply_gaussian,
                        apply_clahe,
                        num_workers)
