@@ -41,80 +41,22 @@ def rescale_mesh(mesh, scale):
     return np.stack([m1[None, :,: ],m2[None, :, :]])
 
 
-def force_compute_coarse_offsets(
-                            yx_shape,
-                            tile_map,
-                            overlap,
-                            filter_size=5,
-                            range_limit=0):
-  
-    '''
-    Modified from sofima.stitch_rigid.compute_coarse_offsets.
-    compute_coarse_offsets does not return values for very small overlap and I cannot make it work. 
-    It is likely caused by some safeguard against false positives.
-    This function forces a value to be returned for tiles that may have to small of an overlap.
-    '''
-
-    def _find_offset(estimate_fn, pre, post, overlap, axis):
-        offset, _ = estimate_fn(overlap, pre, post, range_limit, filter_size)
-        offset[axis] -= overlap
-
-        return offset
-
-    conn_x = np.full((2, 1, yx_shape[0], yx_shape[1]), np.nan)
-    for x in range(0, yx_shape[1] - 1):
-        for y in range(0, yx_shape[0]):
-            if not ((x, y) in tile_map and (x + 1, y) in tile_map):
-                continue
-
-            left = tile_map[(x, y)]
-            right = tile_map[(x + 1, y)]
-
-            conn_x[:, 0, y, x] = _find_offset(
-                stitch_rigid._estimate_offset_horiz,
-                left,
-                right,
-                overlap,
-                0
-            )
-
-    conn_y = np.full((2, 1, yx_shape[0], yx_shape[1]), np.nan)
-    for y in range(0, yx_shape[0] - 1):
-        for x in range(0, yx_shape[1]):
-            if not ((x, y) in tile_map and (x, y + 1) in tile_map):
-                continue
-
-            top = tile_map[(x, y)]
-            bot = tile_map[(x, y + 1)]
-
-            conn_y[:, 0, y, x] = _find_offset(
-                stitch_rigid._estimate_offset_vert,
-                top,
-                bot,
-                overlap,
-                1
-            )
-
-    return conn_x, conn_y
-
-
 def get_coarse_offset(tile_map, 
                       tile_space,
-                      overlap=0.15,
-                      filter_size=5,
-                      force=False):
+                      overlap,
+                      min_range=(10,100,0),
+                      min_overlap=5,
+                      filter_size=5):
     '''
     Compute coarse offset and mesh for initial rigid XY alignment
     '''
     
-    if overlap < 1:
-        overlap = np.round(np.array(tile_map[0,0].shape) * overlap).astype(int)
-    else:
-        overlap = (overlap, overlap)
-
     # Coarse rigid offset between tiles
-    cx, cy = stitch_rigid.compute_coarse_offsets(tile_space, tile_map, 
-                                                 overlaps_xy=((10,overlap[1]),(10,overlap[0])),
+    cx, cy = stitch_rigid.compute_coarse_offsets(tile_space, 
+                                                 tile_map, 
+                                                 overlaps_xy=((overlap),(overlap)),
+                                                 min_range=min_range,
+                                                 min_overlap=min_overlap,
                                                  filter_size=filter_size)
     
     # Figure out offset from neighbors if missing
@@ -123,15 +65,9 @@ def get_coarse_offset(tile_map,
     cx[np.isinf(cx)] = np.nan
     cy[np.isinf(cy)] = np.nan
 
-    if np.all(np.isnan(cx) | np.isinf(cx)) & np.all(np.isnan(cy) | np.isinf(cy)) & force:
-        cx, cy = force_compute_coarse_offsets(tile_space, tile_map, overlap=100)
-        forced = True
-    else:
-        forced = False
-
     coarse_mesh = stitch_rigid.optimize_coarse_mesh(cx, cy)
 
-    return cx, cy, coarse_mesh, forced
+    return cx, cy, coarse_mesh
             
 
 def get_elastic_mesh(tile_map, 
@@ -153,13 +89,13 @@ def get_elastic_mesh(tile_map,
                                                         0, 
                                                         stride=(stride, stride),
                                                         patch_size=(patch_size,patch_size),
-                                                        batch_size=4)
+                                                        batch_size=256)
     fine_y, offsets_y = stitch_elastic.compute_flow_map(tile_map, 
                                                         cy, 
                                                         1,
                                                         stride=(stride, stride),
                                                         patch_size=(patch_size,patch_size),
-                                                        batch_size=4)
+                                                        batch_size=256)
     
     kwargs = {"min_peak_ratio": 1.4, "min_peak_sharpness": 1.4, "max_deviation": 5, "max_magnitude": 0}
     fine_x = {k: flow_utils.clean_flow(v[:, np.newaxis, ...], **kwargs)[:, 0, :, :] for k, v in fine_x.items()}
@@ -190,7 +126,7 @@ def get_elastic_mesh(tile_map,
     # case you might want use aggressive flow filtering to ensure that there are no
     # inaccurate flow vectors). Lower ratios will reduce deformation, which, depending
     # on the initial state of the tiles, might result in visible seams.
-    k0 = 0.02 # inter-section springs (elasticity)
+    k0 = 0.01 # inter-section springs (elasticity)
     # High k0 results in images that tend to "fold" onto themselves
 
     k = 0.1 # intra-section springs (elasticity)
