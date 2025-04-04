@@ -9,14 +9,13 @@ import warnings
 # Prevent printing the following warning, which does not seem to be an issue for the code to run properly:
 #     /home/autoseg/anaconda3/envs/alignment/lib/python3.12/multiprocessing/popen_fork.py:66: RuntimeWarning: os.fork() was called. 
 #     os.fork() is incompatible with multithreaded code, and JAX is multithreaded, so this will likely lead to a deadlock.
-warnings.filterwarnings("ignore", category=RuntimeWarning, message="os.fork() was called")
+warnings.filterwarnings('ignore', category=RuntimeWarning, message='os.fork() was called')
 
 import json
 import logging
 import numpy as np
 import tensorstore as ts
 
-from concurrent import futures
 from tqdm import tqdm
 
 from emalign.utils.stacks import Stack, parse_stack_info
