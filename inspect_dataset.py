@@ -20,16 +20,16 @@ def read_data(
                                 'driver': 'file',
                                 'path': dataset_path,
                                     }}
-    destination = ts.open(spec,
-                        read=True,
-                        dtype=ts.uint8
-                        ).result()
+    dataset = ts.open(spec,
+                      read=True,
+                      dtype=ts.uint8
+                      ).result()
     
     if data_range is None:
-        data = destination[:].read().result()
+        data = dataset[:].read().result()
     else:
-        data_range[1] = min(data_range[1], destination.domain.exclusive_max[0])
-        data = destination[data_range[0]:data_range[1]].read().result()
+        data_range[1] = min(data_range[1], dataset.domain.exclusive_max[0])
+        data = dataset[data_range[0]:data_range[1]].read().result()
 
     if not keep_missing:
         data = data[data.any(axis=(1,2))]
@@ -62,9 +62,23 @@ def inspect_dataset(
             keep_missing=False,
             project_configs=[],
             transitions_only=False,
+            print_shape=False,
             port=55555):
     
     dataset_name = os.path.basename(os.path.abspath(dataset_path))
+
+    if print_shape:
+        spec = {'driver': 'zarr',
+                        'kvstore': {
+                                'driver': 'file',
+                                'path': dataset_path,
+                                    }}
+        dataset = ts.open(spec,
+                        read=True,
+                        dtype=ts.uint8
+                        ).result()
+        print(f'Dataset shape (ZYX): {dataset.shape}')
+        return
     
     if transitions_only:
         dataset_paths = []
@@ -133,6 +147,12 @@ if __name__ == '__main__':
                         type=int,
                         default=55555,
                         help='Port to use for neuroglancer.')
+    parser.add_argument('--print-shape',
+                        dest='print_shape',
+                        default=False,
+                        action='store_true',
+                        help='Print the shape of this dataset. Useful to know what possible data range can be shown.')
+    
     
     args=parser.parse_args()
 
