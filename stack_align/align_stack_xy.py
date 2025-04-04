@@ -128,7 +128,6 @@ def align_stack_xy(output_path,
     #####################
     ### PROCESS STACK ###
     #####################
-    overlap_pad = 50
     pbar = tqdm(stack.slices, position=2, desc=f'{stack.stack_name}: Processing', leave=False)
     for z in pbar:
         pbar.set_description(f'{stack.stack_name}: Loading tile_map...')
@@ -146,18 +145,19 @@ def align_stack_xy(output_path,
                                            tile_map,
                                            preliminary_overlap=prelim_overlap,
                                            scale=[0.3,0.5])
-        max_overlap = max([t.shape for t in tile_map.values()])
-        while overlap == 0:
+        
+        max_overlap = np.max([t.shape for t in tile_map.values()])
+        if overlap < 10:
             # The preliminary overlap is likely too small
-            # Increase it until we find a value, or max overlap is too high
-            prelim_overlap += 100
-
-            if prelim_overlap >= max_overlap:
-                raise RuntimeError('Maximum overlap reached. Images may not overlap, or scale at which to search for overlap is too small.')
+            # Find a better value
             overlap = estimate_tilemap_overlap(tile_space,
-                                           tile_map,
-                                           preliminary_overlap=prelim_overlap,
-                                           scale=[0.3,0.5])
+                                               tile_map,
+                                               preliminary_overlap=max_overlap//2,
+                                               scale=[0.3,0.5])
+            prelim_overlap = int(np.ceil(overlap/100)*100)
+
+            if overlap < 10:
+                raise RuntimeError('Images may not overlap, or scale at which to search for overlap is too small.')
 
         if len(tile_map) > 1:
             # There are more than one tiles
@@ -180,6 +180,7 @@ def align_stack_xy(output_path,
                 tile_masks[k] = mask
             
             pbar.set_description(f'{stack.stack_name}: Computing elastic meshes...')
+            overlap_pad = 50
             cx, cy, coarse_mesh = get_coarse_offset(tile_map, 
                                                     tile_space,
                                                     overlap=[overlap,               # try first
@@ -193,7 +194,8 @@ def align_stack_xy(output_path,
                                           cy, 
                                           coarse_mesh,
                                           stride=stride,
-                                          patch_size=patch_size)
+                                          patch_size=patch_size,
+                                          gamma=0.5)
                 render_stride=stride
             else:
                 meshes = get_elastic_mesh(tile_map, 
@@ -201,14 +203,15 @@ def align_stack_xy(output_path,
                                           cy, 
                                           coarse_mesh,
                                           stride=10,
-                                          patch_size=40)
+                                          patch_size=40,
+                                          gamma=0.5)
                 render_stride=10
 
             # Determine margin by finding the minimum displacement in X or Y between adjacent tiles
             # Margin is how many pixels to ignore from the tiles when rendering. Too high leaves a delimitation, too low leaves a gap
             min_displacement = np.abs(np.concatenate([cx[0,0,0,:][~np.isnan(cx[0,0,0,:])], 
                                                       cy[1,0,0,:][~np.isnan(cy[1,0,0,:])]])).min()
-            margin = max(int(min_displacement // 2 - 5), 1)
+            margin = int(min_displacement // 2 * 0.9)
             
             # Ensure that first tiles acquired are rendered last because they are sharper and should be on top
             meshes = {k:meshes[k] for k in sorted(meshes)[::-1]}
