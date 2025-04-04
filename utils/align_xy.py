@@ -75,7 +75,10 @@ def get_elastic_mesh(tile_map,
                      cy, 
                      coarse_mesh, 
                      stride=20,
-                     patch_size=160):
+                     patch_size=160,
+                     k0=0.01,
+                     k=0.1,
+                     gamma=0):
     
     ''' 
     Compute elastic mesh for XY alignment.
@@ -126,11 +129,10 @@ def get_elastic_mesh(tile_map,
     # case you might want use aggressive flow filtering to ensure that there are no
     # inaccurate flow vectors). Lower ratios will reduce deformation, which, depending
     # on the initial state of the tiles, might result in visible seams.
-    k0 = 0.01 # inter-section springs (elasticity)
-    # High k0 results in images that tend to "fold" onto themselves
-
-    k = 0.1 # intra-section springs (elasticity)
-    gamma = 0 # dampening factor
+    
+    # k0: inter-section springs (elasticity) High k0 results in images that tend to "fold" onto themselves
+    # k: intra-section springs (elasticity)
+    # gamma: dampening factor
 
     config = mesh.IntegrationConfig(dt=0.001, gamma=gamma, k0=k0, k=k, stride=(stride, stride),
                                     num_iters=1000, max_iters=20000, stop_v_max=0.001,
