@@ -146,7 +146,19 @@ def align_stack_xy(output_path,
                                            tile_map,
                                            preliminary_overlap=prelim_overlap,
                                            scale=[0.3,0.5])
-        
+        max_overlap = max([t.shape for t in tile_map.values()])
+        while overlap == 0:
+            # The preliminary overlap is likely too small
+            # Increase it until we find a value, or max overlap is too high
+            prelim_overlap += 100
+
+            if prelim_overlap >= max_overlap:
+                raise RuntimeError('Maximum overlap reached. Images may not overlap, or scale at which to search for overlap is too small.')
+            overlap = estimate_tilemap_overlap(tile_space,
+                                           tile_map,
+                                           preliminary_overlap=prelim_overlap,
+                                           scale=[0.3,0.5])
+
         if len(tile_map) > 1:
             # There are more than one tiles
             # Pad tiles so they are all the same shape (required by sofima)

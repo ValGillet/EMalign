@@ -61,6 +61,7 @@ def estimate_tilemap_overlap(tile_space,
 
     overlap_x = preliminary_overlap - np.abs(offsets_x).max() if offsets_x else 0
     overlap_y = preliminary_overlap - np.abs(offsets_y).max() if offsets_y else 0
+    
     return int(max(overlap_x, overlap_y))
 
 
