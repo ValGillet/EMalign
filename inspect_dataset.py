@@ -28,7 +28,12 @@ def read_data(
     if data_range is None:
         data = dataset[:].read().result()
     else:
-        data_range[1] = min(data_range[1], dataset.domain.exclusive_max[0])
+        if len(data_range) == 2:
+            # Bound range to the possible values
+            data_range[1] = min(data_range[1], dataset.domain.exclusive_max[0])
+        elif len(data_range) == 1:
+            # Only one value, means we go from that value to the end
+            data_range.append(dataset.domain.exclusive_max[0])
         data = dataset[data_range[0]:data_range[1]].read().result()
 
     if not keep_missing:
@@ -62,23 +67,9 @@ def inspect_dataset(
             keep_missing=False,
             project_configs=[],
             transitions_only=False,
-            print_shape=False,
             port=55555):
     
     dataset_name = os.path.basename(os.path.abspath(dataset_path))
-
-    if print_shape:
-        spec = {'driver': 'zarr',
-                        'kvstore': {
-                                'driver': 'file',
-                                'path': dataset_path,
-                                    }}
-        dataset = ts.open(spec,
-                        read=True,
-                        dtype=ts.uint8
-                        ).result()
-        print(f'Dataset shape (ZYX): {dataset.shape}')
-        return
     
     if transitions_only:
         dataset_paths = []
@@ -122,7 +113,8 @@ if __name__ == '__main__':
                         dest='data_range',
                         nargs=2,
                         type=int,
-                        help='Range of slice indices to show.')
+                        help='Range of slice indices to show. One value will be consider as the lower bound.' \
+                             'If too high, will be bounded to the max possible value.')
     parser.add_argument('--keep-missing',
                         dest='keep_missing',
                         default=False,
@@ -147,11 +139,6 @@ if __name__ == '__main__':
                         type=int,
                         default=55555,
                         help='Port to use for neuroglancer.')
-    parser.add_argument('--print-shape',
-                        dest='print_shape',
-                        default=False,
-                        action='store_true',
-                        help='Print the shape of this dataset. Useful to know what possible data range can be shown.')
     
     
     args=parser.parse_args()
