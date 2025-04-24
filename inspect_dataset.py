@@ -6,6 +6,7 @@ import os
 import tensorstore as ts
 
 from glob import glob
+from time import sleep
 
 from emalign.utils.io import get_ordered_datasets
 
@@ -28,13 +29,14 @@ def read_data(
     if data_range is None:
         data = dataset[:].read().result()
     else:
+        z0 = data_range[0]
         if len(data_range) == 2:
             # Bound range to the possible values
-            data_range[1] = min(data_range[1], dataset.domain.exclusive_max[0])
+            z1 = min(data_range[1], dataset.domain.exclusive_max[0])
         elif len(data_range) == 1:
             # Only one value, means we go from that value to the end
-            data_range.append(dataset.domain.exclusive_max[0])
-        data = dataset[data_range[0]:data_range[1]].read().result()
+            z1 = dataset.domain.exclusive_max[0]
+        data = dataset[z0:z1].read().result()
 
     if not keep_missing:
         data = data[data.any(axis=(1,2))]
@@ -52,8 +54,10 @@ def show_data(layers,
     with viewer.txn() as s:
         s.dimensions = dimensions
 
-        for name, data in layers.items():
-            s.layers[name] = neuroglancer.ImageLayer(source=neuroglancer.LocalVolume(data.T, dimensions), cross_section_render_scale = 1)
+        for i, (name, data) in enumerate(layers.items()):
+            layer = neuroglancer.ImageLayer(source=neuroglancer.LocalVolume(data.T, dimensions))
+            s.layers[name] = layer
+            s.layers[name].visible = i == 0
         s.layout = 'xy'
 
     url = viewer.get_viewer_url()
@@ -63,15 +67,22 @@ def show_data(layers,
 
 def inspect_dataset(
             dataset_path,
-            data_range=None,
+            data_range=[0],
             keep_missing=False,
             project_configs=[],
-            transitions_only=False,
+            mode=None,
             port=55555):
+    
+    modes = ['z_transitions', 'all_ds']
+    
+    if mode is not None and mode not in modes:
+        raise ValueError(f'Invalid mode. Must be one of: {modes}')
     
     dataset_name = os.path.basename(os.path.abspath(dataset_path))
     
-    if transitions_only:
+    if mode is None:
+        data = {dataset_name: read_data(dataset_path, data_range=tuple(data_range), keep_missing=keep_missing)}    
+    elif mode == 'z_transitions':
         dataset_paths = []
         config_paths = glob(os.path.join(project_configs, '*.json'))
 
@@ -88,11 +99,16 @@ def inspect_dataset(
             data_range = [int(z - max(1, window/2)), int(z + max(1, window/2))]
 
             try:
-                data.update({f'{dataset_name}_{z}': read_data(dataset_path, data_range=data_range, keep_missing=keep_missing)})
+                data.update({f'{dataset_name}_{z}': read_data(dataset_path, data_range=tuple(data_range), keep_missing=keep_missing)})
             except:
                 continue
-    else:
-        data = {dataset_name: read_data(dataset_path, data_range=data_range, keep_missing=keep_missing)}
+    elif mode == 'all_ds':
+        dataset_paths = sorted(glob(os.path.join(dataset_path, '*')))
+
+        data = {}
+        for dataset_path in dataset_paths:
+            dataset_name = os.path.basename(dataset_path)
+            data.update({dataset_name: read_data(dataset_path, data_range=tuple(data_range), keep_missing=keep_missing)})     
 
     show_data(data, port=port)
 
@@ -111,8 +127,9 @@ if __name__ == '__main__':
     parser.add_argument('--data-range',
                         metavar='DATA_RANGE',
                         dest='data_range',
-                        nargs=2,
+                        nargs='+',
                         type=int,
+                        default=[0],
                         help='Range of slice indices to show. One value will be consider as the lower bound.' \
                              'If too high, will be bounded to the max possible value.')
     parser.add_argument('--keep-missing',
@@ -127,11 +144,11 @@ if __name__ == '__main__':
                         # nargs='+',
                         type=str,
                         help='Path to the project configs containing information about the dataset\'s transitions.')
-    parser.add_argument('--transitions-only',
-                        dest='transitions_only',
-                        default=False,
-                        action='store_true',
-                        help='Only show the transitions between parts of the dataset, as opposed to the full thing.')
+    parser.add_argument('--mode',
+                        dest='mode',
+                        type=str,
+                        default=None,
+                        help='Visualization mode. One of: z_transitions, all_ds')
     parser.add_argument('--port',
                         metavar='PORT',
                         dest='port',
