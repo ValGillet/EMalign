@@ -3,42 +3,103 @@ import functools as ft
 import jax
 import jax.numpy as jnp
 import numpy as np
+import warnings
 
+from collections import defaultdict
 from PIL import Image
 from sofima import stitch_rigid, stitch_elastic, mesh, flow_utils
 
 from .offsets import *
 
 
-def test_laplacian(padded_img1, padded_img2, xy_offset):
-    pad = xy_offset_to_pad(xy_offset)
-
-    padded_img1 = np.pad(padded_img1, pad)
-    padded_img2 = np.pad(padded_img2, pad[:, ::-1])
-
-    x,y = [abs(int(n)) for n in xy_offset]
-    mask = (padded_img1>0) & (padded_img2>0)
-    overlap = np.mean([padded_img1*mask, padded_img2*mask], axis=0)[y:-y, x:-x]
-    
-    lp = cv.Laplacian(np.round(overlap).astype(np.uint8), cv.CV_16S)
-    
-    return cv.convertScaleAbs(lp).sum()
-
-
-def rescale_mesh(mesh, scale):
+def get_tile_map_margins(tile_space, margin, margin_boundaries=10):
 
     '''
-    Upscale mesh. Used to upsample meshes that were computed with a downsample version of an image.
+    Compute margin per tile such that no data is cropped out at the boundaries of the image where no stitching is required.
+    This ensures that no data is lost in case stitching between stacks is necessary.
     '''
-   
-    m1, m2 = mesh*scale
-    m1 = Image.fromarray(m1.squeeze())
-    m2 = Image.fromarray(m2.squeeze())
 
-    m1 = np.array(m1.resize((m1.width*scale, m1.height*scale), resample=Image.Resampling(0)))
-    m2 = np.array(m2.resize((m2.width*scale, m2.height*scale), resample=Image.Resampling(0)))
+    # top, bottom, left, right
+    margin_overrides = defaultdict(list)
 
-    return np.stack([m1[None, :,: ],m2[None, :, :]])
+    for y in range(0, tile_space[0] - 1):
+        for x in range(0, tile_space[1]):
+            if y == 0:
+                margin_overrides[(x,y)].append(margin_boundaries)
+            margin_overrides[(x,y)].append(margin)
+            margin_overrides[(x,y+1)].append(margin)
+            if y+1 == tile_space[0]-1:
+                margin_overrides[(x,y+1)].append(margin_boundaries)
+
+    for x in range(0, tile_space[1] - 1):
+        for y in range(0, tile_space[0]):
+            if x == 0:
+                margin_overrides[(x,y)].append(margin_boundaries)
+            margin_overrides[(x,y)].append(margin)
+            margin_overrides[(x+1,y)].append(margin)
+            if x+1 == tile_space[1]-1:
+                margin_overrides[(x+1,y)].append(margin_boundaries)
+
+    return margin_overrides
+
+
+def check_stitch(warped_tiles, margin):
+    from .tile_map_positions import get_overlap, compute_laplacian_var_diff
+
+    tile_space = (np.array(list(warped_tiles.keys()))[:,1].max()+1, 
+                  np.array(list(warped_tiles.keys()))[:,0].max()+1)
+    
+    overlap_scores = []
+    for x in range(0, tile_space[1] - 1):
+        for y in range(0, tile_space[0]):
+            x1,y1,left = warped_tiles[(x,y)] 
+            x2,y2,right = warped_tiles[(x+1,y)]
+
+            offset = np.array([x1-x2, y1-y2])
+            
+            overlap = get_overlap(left, right, offset, 0)
+
+            if overlap is None:
+                overlap_score = 0
+            else:
+                overlap1, overlap2, _ = overlap
+                try:
+                    overlap_score = compute_laplacian_var_diff(overlap1[:, :-margin], 
+                                                               overlap2[:, margin:],
+                                                               None)
+                except cv2.error as e:
+                    if e.err == '!_src.empty()':
+                        overlap_score = 0
+                        warnings.warn('Empty overlap. There may not be overlap between tiles. Overlap score set to 0.')
+                    else:
+                        raise e
+            overlap_scores.append(overlap_score)
+
+    for y in range(0, tile_space[0] - 1):
+        for x in range(0, tile_space[1]):
+            x1,y1,bot = warped_tiles[(x,y)] 
+            x2,y2,top = warped_tiles[(x,y+1)] 
+            
+            offset = np.array([x1-x2, y1-y2])
+            
+            overlap = get_overlap(bot, top, offset, 0)
+
+            if overlap is None:
+                overlap_score = 0
+            else:
+                overlap1, overlap2, _ = overlap
+                try:
+                    overlap_score = compute_laplacian_var_diff(overlap1[:-margin, :], 
+                                                               overlap2[margin:, :],
+                                                               None)
+                except cv2.error as e:
+                    if e.err == '!_src.empty()':
+                        overlap_score = 0
+                        warnings.warn('Empty overlap. There may not be overlap between tiles. Overlap score set to 0.')
+                    else:
+                        raise e
+            overlap_scores.append(overlap_score)
+    return overlap_scores
 
 
 def get_coarse_offset(tile_map, 
@@ -92,13 +153,13 @@ def get_elastic_mesh(tile_map,
                                                         0, 
                                                         stride=(stride, stride),
                                                         patch_size=(patch_size,patch_size),
-                                                        batch_size=256)
+                                                        batch_size=128)
     fine_y, offsets_y = stitch_elastic.compute_flow_map(tile_map, 
                                                         cy, 
                                                         1,
                                                         stride=(stride, stride),
                                                         patch_size=(patch_size,patch_size),
-                                                        batch_size=256)
+                                                        batch_size=128)
     
     kwargs = {"min_peak_ratio": 1.4, "min_peak_sharpness": 1.4, "max_deviation": 5, "max_magnitude": 0}
     fine_x = {k: flow_utils.clean_flow(v[:, np.newaxis, ...], **kwargs)[:, 0, :, :] for k, v in fine_x.items()}
