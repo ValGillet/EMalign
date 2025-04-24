@@ -10,9 +10,12 @@ from concurrent import futures
 from cv2 import resize, GaussianBlur, createCLAHE, equalizeHist
 from glob import glob
 from PIL import Image
+from pymongo import MongoClient
 from tqdm import tqdm
 
 from sofima import warp
+
+from emalign.utils.align_xy import check_stitch
 
 
 ### FIND FILES
@@ -64,7 +67,7 @@ def get_tilesets(main_dir, resolution, dir_pattern, num_workers):
 
 ### READ TIFS
 
-def load_tilemap(tile_map_paths, invert, apply_gaussian, apply_clahe, scale):
+def load_tilemap(tile_map_paths, invert, apply_gaussian, apply_clahe, scale, skip_missing=False):
     '''
     Load a tile map based on provided paths. Apply image processing if specified.
     '''
@@ -76,13 +79,15 @@ def load_tilemap(tile_map_paths, invert, apply_gaussian, apply_clahe, scale):
     tile_map = {}
     tile_map_ds = {}
     for yx_pos, tile_path in tile_map_paths.items():
-        img, img_ds = load_tif(tile_path, invert[yx_pos], apply_gaussian, apply_clahe, scale)
+        try:
+            img, img_ds = load_tif(tile_path, invert[yx_pos], apply_gaussian, apply_clahe, scale)
+        except Exception as e:
+            if skip_missing:
+                img, img_ds = None, None
+            else:
+                raise e
         tile_map[yx_pos] = img
         tile_map_ds[yx_pos] = img_ds
-
-    # From first to last in order of acquisition. Defines which is on top (first in list)
-    tile_map = {k: tile_map[k] for k in sorted(list(tile_map.keys()))}
-    tile_map_ds = {k: tile_map_ds[k] for k in sorted(list(tile_map_ds.keys()))}
 
     return z, tile_map, tile_map_ds
     
@@ -126,6 +131,7 @@ def set_dataset_attributes(dataset, attrs):
     with open(os.path.join(dataset.kvstore.path, '.zattrs'), 'w') as f:
         json.dump(attrs, f, indent='')
     return True 
+
 
 def get_dataset_attributes(dataset):
     with open(os.path.join(dataset.kvstore.path, '.zattrs'), 'r') as f:
@@ -188,24 +194,47 @@ def get_data_samples(dataset, step_slices, yx_target_resolution):
 
 ### WRITE 
 
-def render_slice_xy(dest, z, tile_map, meshes, stride, tile_masks=None, return_render=False, parallelism=1, **kwargs):
-    try:
-        if len(tile_map) > 1:
-            img, _ = warp.render_tiles(tile_map, meshes, tile_masks=tile_masks, parallelism=parallelism, stride=(stride, stride), **kwargs)
-        else:
-            img = list(tile_map.values())[0]
-        
-        if return_render:
-            return img
-        else:
-            y,x = img.shape
-            if np.any(dest.domain.exclusive_max[1:] < np.array([y, x])):
-                dest = dest.resize(exclusive_max=[None, y, x], expand_only=True).result()
-            dest[z:z+1, :y, :x].write(img).result()
-            return True
-    except Exception as e:
-        logging.error(f'Error in render_slice: {e}')
-        raise
+def render_slice_xy(dest,
+                    z,
+                    tile_map,
+                    meshes,
+                    stride,
+                    tile_masks=None,
+                    parallelism=1,
+                    margin=50,
+                    dest_mask=None,
+                    return_render=False,
+                    **kwargs):
+
+    if len(tile_map) > 1:
+        # Render stitched image
+        img, mask, warped_tiles = warp.render_tiles(tile_map, meshes, 
+                                                    tile_masks=tile_masks, 
+                                                    parallelism=parallelism, 
+                                                    stride=(stride, stride), 
+                                                    return_warped_tiles=True,
+                                                    margin=margin,
+                                                    **kwargs)
+        # Evaluate overlap
+        stitch_score = check_stitch(warped_tiles, margin)
+    else:
+        img = list(tile_map.values())[0]
+        stitch_score = 1
+    
+    if return_render:
+        return img, stitch_score
+    else:
+        y,x = img.shape
+        if np.any(dest.domain.exclusive_max[1:] < np.array([y, x])):
+            dest = dest.resize(exclusive_max=[None, y, x], expand_only=True).result()
+        dest[z:z+1, :y, :x].write(img).result()
+
+        if dest_mask is not None:
+            if np.any(dest_mask.domain.exclusive_max[1:] < np.array([y, x])):
+                dest_mask = dest_mask.resize(exclusive_max=[None, y, x], expand_only=True).result()
+            dest_mask[z:z+1, :y, :x].write(mask).result()
+
+        return stitch_score
 
 
 def render_slice_z(destination, z, data, inv_map, data_bbox, flow_bbox, stride, return_render=False, parallelism=1):
@@ -223,3 +252,11 @@ def render_slice_z(destination, z, data, inv_map, data_bbox, flow_bbox, stride, 
 
         destination[z:z+1, :y, :x].write(aligned).result()
         return True
+    
+# MONGODB
+def check_progress(arguments, db_host, db_name, collection_name):
+    
+    client = MongoClient(db_host)
+    db = client[db_name]
+    progress_collection = db[collection_name]
+    return progress_collection.count_documents(arguments) >= 1
