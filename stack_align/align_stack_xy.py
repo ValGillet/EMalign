@@ -1,6 +1,5 @@
 import os
 
-from param import output
 # To prevent running out of memory because of preallocation
 os.environ['XLA_PYTHON_CLIENT_PREALLOCATE'] = 'false'
 
@@ -17,15 +16,15 @@ import json
 import logging
 import numpy as np
 import tensorstore as ts
+import sys
 
 from pymongo import MongoClient
 from tqdm import tqdm
 
+from emalign.utils.align_xy import get_coarse_offset, get_elastic_mesh
 from emalign.utils.stacks import Stack, parse_stack_info
-from emalign.utils.io import *
-from emalign.utils.align_xy import *
-from emalign.utils.inspect import *
-from emalign.utils.offsets import estimate_tilemap_overlap
+from emalign.utils.io import check_progress, render_slice_xy, set_dataset_attributes
+from emalign.utils.tile_map import get_tile_map_margins
 
 logging.basicConfig(level=logging.INFO)
 logging.getLogger('absl').setLevel(logging.WARNING)
@@ -39,7 +38,6 @@ def align_stack_xy(output_path,
                    resolution,
                    offset,
                    stride,
-                   prelim_overlap,
                    apply_gaussian,
                    apply_clahe,
                    num_cores,
@@ -170,30 +168,6 @@ def align_stack_xy(output_path,
                             },
                             dtype=ts.bool).result()  
         
-
-    # Estimate overlap
-    logging.info(f'Estimating overlap for {stack.stack_name}...')
-    z = stack.slices[0]
-    _, tile_map, _ = load_tilemap({z: stack.slice_to_tilemap[z]}, 
-                                   stack.tile_maps_invert,
-                                   apply_gaussian, 
-                                   apply_clahe,
-                                   1)
-    tile_space = (np.array(list(tile_map.keys()))[:,1].max()+1, 
-                  np.array(list(tile_map.keys()))[:,0].max()+1)
-    
-    if len(tile_map) > 1:
-        overlap = estimate_tilemap_overlap(tile_space,
-                                           tile_map,
-                                           prelim_overlap=prelim_overlap,
-                                           scale=[0.5, 1],
-                                           score_threshold=0.7)  # How good does the overlap need to be to be considered
-        logging.info(f'Overlap: {overlap}')
-        if overlap == 0:
-            raise RuntimeError(f'Images may not overlap properly for {stack.stack_name}. Try changing preliminary overlap or overlap score threshold.')
-    else:
-        logging.info('Unique tile, no overlap.')
-    
     #####################
     ### PROCESS STACK ###
     #####################
@@ -203,68 +177,17 @@ def align_stack_xy(output_path,
             pbar.set_description(f'{stack.stack_name}: Skipping...')
             continue
         pbar.set_description(f'{stack.stack_name}: Loading tile_map...')
-        z, tile_map, _ = load_tilemap({z: stack.slice_to_tilemap[z]}, 
-                                       stack.tile_maps_invert,
-                                       apply_gaussian, 
-                                       apply_clahe,
-                                       1,
-                                       skip_missing=True)
-        
-        missing_tile = []
-        for k, img in tile_map.items():
-            if img is not None:
-                continue
-            else:
-                missing_tile.append(k)
-                # Try previous Z
-                prev_z = stack.slices[stack.slices.index(z)-1]
-                tif_path = stack.slice_to_tilemap[prev_z][k]
-                img, _ = load_tif(tif_path, 
-                                  stack.tile_maps_invert[k], 
-                                  apply_gaussian, 
-                                  apply_clahe, 
-                                  1)
-            if img is None:
-                # Try next Z
-                next_z = stack.slices[stack.slices.index(z)+1]
-                tif_path = stack.slice_to_tilemap[next_z][k]
-                img, _ = load_tif(tif_path, 
-                                  stack.tile_maps_invert[k], 
-                                  apply_gaussian, 
-                                  apply_clahe, 
-                                  1)
-            if img is None:
-                raise RuntimeError(f'Tiles {k} missing or corrupted for three slices in a row ({prev_z}, {z}, {next_z})')
-            
-            tile_map[k] = img
-
-        tile_space = (np.array(list(tile_map.keys()))[:,1].max()+1, 
-                      np.array(list(tile_map.keys()))[:,0].max()+1)
+        tm = stack.get_tile_map(z, apply_gaussian, apply_clahe)
+        tile_map = tm.tile_map
+        overlap = tm.estimate_overlap(scale=0.1)
         
         if len(tile_map) > 1:
-            # There are more than one tiles
-            # Pad tiles so they are all the same shape (required by sofima)
-            max_shape = np.max([t.shape for t in tile_map.values()],axis=0)
-
-            tile_masks = {}
-            for k in sorted(tile_map): 
-                tile = tile_map[k]
-                mask = np.ones_like(tile)
-
-                if np.any(np.array(tile.shape) != max_shape):
-                    d = k[::-1] == (np.array(tile_space) - 1)
-                    d[1] = np.logical_not(d[1])
-
-                    tile = pad_to_shape(tile, max_shape, d.astype(int))
-                    mask = pad_to_shape(mask, max_shape, d.astype(int))
-                
-                tile_map[k] = tile
-                tile_masks[k] = mask
-            
+            # There are more than one tiles            
             pbar.set_description(f'{stack.stack_name}: Computing elastic meshes...')
+            # Compute overlap for better coarse mesh estimation
             overlap_pad = 80
             cx, cy, coarse_mesh = get_coarse_offset(tile_map, 
-                                                    tile_space,
+                                                    tm.tile_space,
                                                     overlap=[overlap,               # try first
                                                              overlap+overlap_pad]   # try second
                                                    )
@@ -300,14 +223,14 @@ def align_stack_xy(output_path,
                                       k0=k0,
                                       k=k,
                                       gamma=gamma)
-            
-            margin_map = get_tile_map_margins(tile_space, margin)
-                                      
             # Ensure that first tiles acquired are rendered last because they are sharper and should be on top
             meshes = {k:meshes[k] for k in sorted(meshes)[::-1]}
+            margin_map = get_tile_map_margins(tm.tile_space, margin)
+                                      
             pbar.set_description(f'{stack.stack_name}: Rendering...')
             parallelism = min(num_cores, len(tile_map))
-            stitch_score = render_slice_xy(dataset, z-z_offset, tile_map, meshes, render_stride, tile_masks, parallelism=parallelism, margin_overrides=margin_map, dest_mask=dataset_mask)
+            stitch_score = render_slice_xy(dataset, z-z_offset, tile_map, meshes, render_stride, tm.tile_masks, 
+                                           parallelism=parallelism, margin_overrides=margin_map, dest_mask=dataset_mask)
         else:
             # There is only one tile, no need to compute anything
             pbar.set_description(f'{stack.stack_name}: Writing unique tile...')
@@ -329,7 +252,7 @@ def align_stack_xy(output_path,
             'overlap': overlap,
             'margin': margin,
             'stitch_score': float(np.median(stitch_score)),
-            'missing_tile': missing_tile
+            'missing_tile': tm.missing_tile
               }
         collection_progress.insert_one(doc)
 
