@@ -5,6 +5,7 @@ from glob import glob
 from collections import defaultdict
 
 from .io import *
+from .tile_map import TileMap
 
 
 def parse_stack_info(config_path):
@@ -90,3 +91,55 @@ class Stack:
 
         tile_indices = list(d.keys())
         self.tile_maps_invert = dict(zip(tile_indices, [None]*len(tile_indices)))
+
+    def get_tile_map(self, z, apply_gaussian, apply_clahe, skip_missing=True):
+
+        scale = 1
+        # Load tile_map
+        tile_map_paths = self.slice_to_tilemap[z]
+        _, tile_map, _ = load_tilemap({z: tile_map_paths}, 
+                                       self.tile_maps_invert,
+                                       apply_gaussian, 
+                                       apply_clahe,
+                                       scale,
+                                       skip_missing=True)
+        
+        # Check for missing tiles and replace with previous or next adjacent tile
+        missing_tiles = []
+        for k, img in tile_map.items():
+            if img is not None:
+                continue
+            elif not skip_missing:
+                raise RuntimeError(f'Missing slice {k} for z={z}')
+            else:
+                missing_tiles.append(k)
+                # Try previous Z
+                prev_z = self.slices[self.slices.index(z)-1]
+                tif_path = self.slice_to_tilemap[prev_z][k]
+                img, _ = load_tif(tif_path, 
+                                  self.tile_maps_invert[k], 
+                                  apply_gaussian, 
+                                  apply_clahe, 
+                                  scale)
+            if img is None:
+                # Try next Z
+                next_z = self.slices[self.slices.index(z)+1]
+                tif_path = self.slice_to_tilemap[next_z][k]
+                img, _ = load_tif(tif_path, 
+                                self.tile_maps_invert[k], 
+                                apply_gaussian, 
+                                apply_clahe, 
+                                scale)
+            if img is None:
+                raise RuntimeError(f'Tiles {k} missing or corrupted for three slices in a row ({prev_z}, {z}, {next_z})')
+            tile_map_paths[k] = tif_path
+            tile_map[k] = img
+
+        tm = TileMap(z=z, tile_map_paths=tile_map_paths, tile_map=tile_map, stack_name=self.stack_name)
+        tm.missing_tiles = missing_tiles
+        tm.processing = {'tile_maps_invert': self.tile_maps_invert,
+                         'gaussian': apply_gaussian,
+                         'clahe': apply_clahe,
+                         'scale': scale}
+
+        return tm

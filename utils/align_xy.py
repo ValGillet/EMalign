@@ -1,4 +1,3 @@
-import cv2 as cv
 import functools as ft
 import jax
 import jax.numpy as jnp
@@ -6,41 +5,8 @@ import numpy as np
 import warnings
 
 from collections import defaultdict
-from PIL import Image
+from cv2 import error
 from sofima import stitch_rigid, stitch_elastic, mesh, flow_utils
-
-from .offsets import *
-
-
-def get_tile_map_margins(tile_space, margin, margin_boundaries=10):
-
-    '''
-    Compute margin per tile such that no data is cropped out at the boundaries of the image where no stitching is required.
-    This ensures that no data is lost in case stitching between stacks is necessary.
-    '''
-
-    # top, bottom, left, right
-    margin_overrides = defaultdict(list)
-
-    for y in range(0, tile_space[0] - 1):
-        for x in range(0, tile_space[1]):
-            if y == 0:
-                margin_overrides[(x,y)].append(margin_boundaries)
-            margin_overrides[(x,y)].append(margin)
-            margin_overrides[(x,y+1)].append(margin)
-            if y+1 == tile_space[0]-1:
-                margin_overrides[(x,y+1)].append(margin_boundaries)
-
-    for x in range(0, tile_space[1] - 1):
-        for y in range(0, tile_space[0]):
-            if x == 0:
-                margin_overrides[(x,y)].append(margin_boundaries)
-            margin_overrides[(x,y)].append(margin)
-            margin_overrides[(x+1,y)].append(margin)
-            if x+1 == tile_space[1]-1:
-                margin_overrides[(x+1,y)].append(margin_boundaries)
-
-    return margin_overrides
 
 
 def check_stitch(warped_tiles, margin):
@@ -67,7 +33,7 @@ def check_stitch(warped_tiles, margin):
                     overlap_score = compute_laplacian_var_diff(overlap1[:, :-margin], 
                                                                overlap2[:, margin:],
                                                                None)
-                except cv2.error as e:
+                except error as e:
                     if e.err == '!_src.empty()':
                         overlap_score = 0
                         warnings.warn('Empty overlap. There may not be overlap between tiles. Overlap score set to 0.')
@@ -92,7 +58,7 @@ def check_stitch(warped_tiles, margin):
                     overlap_score = compute_laplacian_var_diff(overlap1[:-margin, :], 
                                                                overlap2[margin:, :],
                                                                None)
-                except cv2.error as e:
+                except error as e:
                     if e.err == '!_src.empty()':
                         overlap_score = 0
                         warnings.warn('Empty overlap. There may not be overlap between tiles. Overlap score set to 0.')

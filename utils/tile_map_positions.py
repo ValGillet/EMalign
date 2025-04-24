@@ -73,7 +73,7 @@ def compute_laplacian_var_diff(overlap_1, overlap_2, mask):
     return 1 - abs(lap_var1 - lap_var2) / max(lap_var1, lap_var2)
 
 
-def check_overlap(img1, img2, xy_offset, theta, threshold=0.5, refine=True):
+def check_overlap(img1, img2, xy_offset, theta, threshold=0.5, scale=(0.3, 0.5), refine=True):
 
     '''
     Compute a metric describing how well images overlap, based on a given offset and rotation. 
@@ -91,11 +91,16 @@ def check_overlap(img1, img2, xy_offset, theta, threshold=0.5, refine=True):
             logging.debug('Refining overlap estimation...')
             # Retry the overlap, it can often get better
             try:
-                xy_offset, theta = estimate_transform_sift(overlap1, overlap2, scale=0.3)
+                xy_offset, theta = estimate_transform_sift(overlap1, overlap2, scale=scale[0])
             except:
-                xy_offset, theta = estimate_transform_sift(overlap1, overlap2, scale=0.5)
-            overlap1, overlap2, mask = get_overlap(overlap1, overlap2, xy_offset, theta)
-            lap_variance_diff = compute_laplacian_var_diff(overlap1, overlap2, mask)
+                xy_offset, theta = estimate_transform_sift(overlap1, overlap2, scale=scale[1])
+            res = get_overlap(overlap1, overlap2, xy_offset, theta)
+            
+            if res is not None:
+                overlap1, overlap2, mask = res
+                lap_variance_diff = compute_laplacian_var_diff(overlap1, overlap2, mask)
+            else:
+                lap_variance_diff = 0
     else:
         # Images do not overlap (displacement is larger than image itself)
         lap_variance_diff = 0
@@ -160,7 +165,7 @@ def get_tile_positions_graph(G):
 def estimate_tile_map_positions(combined_stacks, 
                                 apply_gaussian, 
                                 apply_clahe, 
-                                scale=[0.3, 0.5], 
+                                scale=[0.5, 1], 
                                 overlap_score_threshold=0.8,
                                 rotation_threshold=5):
 
@@ -219,17 +224,27 @@ def estimate_tile_map_positions(combined_stacks,
             # Different stacks, they may not overlap
             img1 = all_tiles[k1]
             img2 = all_tiles[k2]
+            # ToDo: refactor this ugly thing
             try:
                 offset, angle = estimate_transform_sift(img1, img2, scale[0])
             except:
-                offset, angle = estimate_transform_sift(img1, img2, scale[1])
+                try:
+                    offset, angle = estimate_transform_sift(img1, img2, scale[1])
+                except:
+                    offset = None
+                    angle = 0
 
-            # Offset of k1 relative to k2
-            relative_offset = np.abs(offset).argsort() * (offset/np.abs(offset)) * np.array([1,-1])
-            overlap_score = check_overlap(img1, img2, 
-                                            offset, angle, 
-                                            threshold=overlap_score_threshold, refine=True)
-
+            if offset is not None:
+                # Offset of k1 relative to k2
+                relative_offset = np.abs(offset).argsort() * (offset/np.abs(offset)) * np.array([1,-1])
+                overlap_score = check_overlap(img1, img2, 
+                                                offset, angle, 
+                                                threshold=overlap_score_threshold, 
+                                                scale=scale,
+                                                refine=True)
+            else:
+                relative_offset = (0,0)
+                overlap_score = 0
         overlaps.append((k1, k2, relative_offset, angle, overlap_score))
         # u, v, relative xy_offset, angle, score
 
