@@ -1,4 +1,6 @@
 import os
+
+from param import output
 # To prevent running out of memory because of preallocation
 os.environ['XLA_PYTHON_CLIENT_PREALLOCATE'] = 'false'
 
@@ -16,6 +18,7 @@ import logging
 import numpy as np
 import tensorstore as ts
 
+from pymongo import MongoClient
 from tqdm import tqdm
 
 from emalign.utils.stacks import Stack, parse_stack_info
@@ -39,7 +42,8 @@ def align_stack_xy(output_path,
                    prelim_overlap,
                    apply_gaussian,
                    apply_clahe,
-                   num_cores):
+                   num_cores,
+                   overwrite=False):
     
     '''
     Align and stitch image stack in XY. 
@@ -90,13 +94,23 @@ def align_stack_xy(output_path,
 
             Number of CPUs to use for rendering stitched images.
     '''
-    
+
+    db_host=None
+    project = os.path.basename(output_path).rstrip('.zarr')
+    db_name=f'alignment_progress_{project}'
+    collection_name='XY_' + stack_name
+
+    client = MongoClient(db_host)
+    db = client[db_name]
+    collection_progress = db[collection_name]
+
     stack = Stack(stack_name=stack_name, 
                   tile_maps_paths=tile_maps_paths, 
                   tile_maps_invert=tile_maps_invert)
 
     # Variables
-    zarr_path  = os.path.join(output_path, stack.stack_name)
+    zarr_path = os.path.join(output_path, stack.stack_name)
+    zarr_path_mask = os.path.join(output_path, stack.stack_name + '_mask')
     attrs_path = os.path.join(zarr_path, '.zattrs')
 
     z_offset = min(stack.slices)
@@ -107,57 +121,126 @@ def align_stack_xy(output_path,
     if os.path.exists(attrs_path):
        logging.info(f'Skipping {stack.stack_name} because it was already processed.')
        return False
+    
+    if overwrite or not os.path.exists(zarr_path):
+        dataset = ts.open({'driver': 'zarr',
+                            'kvstore': {
+                                'driver': 'file',
+                                'path': zarr_path,
+                                        },
+                            'metadata':{
+                                'shape': [z_shape + 1, 
+                                            1, 1],
+                                'chunks':[1,512,512]
+                                        },
+                            'transform': {'input_labels': ['z', 'y', 'x']}
+                            },
+                            dtype=ts.uint8, 
+                            create=True,
+                            delete_existing=True).result()   
+        
+        dataset_mask = ts.open({'driver': 'zarr',
+                            'kvstore': {
+                                'driver': 'file',
+                                'path': zarr_path_mask,
+                                        },
+                            'metadata':{
+                                'shape': [z_shape + 1, 
+                                            1, 1],
+                                'chunks':[1,512,512]
+                                        },
+                            'transform': {'input_labels': ['z', 'y', 'x']}
+                            },
+                            dtype=ts.bool,
+                            create=True,
+                            delete_existing=True).result()   
+    else:
+        dataset = ts.open({'driver': 'zarr',
+                            'kvstore': {
+                                'driver': 'file',
+                                'path': zarr_path,
+                                        },
+                            },
+                            dtype=ts.uint8).result()  
+        dataset_mask = ts.open({'driver': 'zarr',
+                            'kvstore': {
+                                'driver': 'file',
+                                'path': zarr_path_mask,
+                                        },
+                            },
+                            dtype=ts.bool).result()  
+        
 
-    dataset = ts.open({'driver': 'zarr',
-                        'kvstore': {
-                            'driver': 'file',
-                            'path': zarr_path,
-                                    },
-                        'metadata':{
-                            'shape': [z_shape + 1, 
-                                        1, 1],
-                            'chunks':[1,512,512]
-                                    },
-                        'transform': {'input_labels': ['z', 'y', 'x']}
-                        },
-                        dtype=ts.uint8, 
-                        create=True,
-                        delete_existing=True).result()   
+    # Estimate overlap
+    logging.info(f'Estimating overlap for {stack.stack_name}...')
+    z = stack.slices[0]
+    _, tile_map, _ = load_tilemap({z: stack.slice_to_tilemap[z]}, 
+                                   stack.tile_maps_invert,
+                                   apply_gaussian, 
+                                   apply_clahe,
+                                   1)
+    tile_space = (np.array(list(tile_map.keys()))[:,1].max()+1, 
+                  np.array(list(tile_map.keys()))[:,0].max()+1)
+    
+    if len(tile_map) > 1:
+        overlap = estimate_tilemap_overlap(tile_space,
+                                           tile_map,
+                                           prelim_overlap=prelim_overlap,
+                                           scale=[0.5, 1],
+                                           score_threshold=0.7)  # How good does the overlap need to be to be considered
+        logging.info(f'Overlap: {overlap}')
+        if overlap == 0:
+            raise RuntimeError(f'Images may not overlap properly for {stack.stack_name}. Try changing preliminary overlap or overlap score threshold.')
+    else:
+        logging.info('Unique tile, no overlap.')
     
     #####################
     ### PROCESS STACK ###
     #####################
     pbar = tqdm(stack.slices, position=2, desc=f'{stack.stack_name}: Processing', leave=False)
     for z in pbar:
+        if check_progress({'stack_name': stack.stack_name, 'z': z}, db_host, db_name, collection_name) and not overwrite:
+            pbar.set_description(f'{stack.stack_name}: Skipping...')
+            continue
         pbar.set_description(f'{stack.stack_name}: Loading tile_map...')
         z, tile_map, _ = load_tilemap({z: stack.slice_to_tilemap[z]}, 
-                                        stack.tile_maps_invert,
-                                        apply_gaussian, 
-                                        apply_clahe,
-                                        1)
+                                       stack.tile_maps_invert,
+                                       apply_gaussian, 
+                                       apply_clahe,
+                                       1,
+                                       skip_missing=True)
+        
+        missing_tile = []
+        for k, img in tile_map.items():
+            if img is not None:
+                continue
+            else:
+                missing_tile.append(k)
+                # Try previous Z
+                prev_z = stack.slices[stack.slices.index(z)-1]
+                tif_path = stack.slice_to_tilemap[prev_z][k]
+                img, _ = load_tif(tif_path, 
+                                  stack.tile_maps_invert[k], 
+                                  apply_gaussian, 
+                                  apply_clahe, 
+                                  1)
+            if img is None:
+                # Try next Z
+                next_z = stack.slices[stack.slices.index(z)+1]
+                tif_path = stack.slice_to_tilemap[next_z][k]
+                img, _ = load_tif(tif_path, 
+                                  stack.tile_maps_invert[k], 
+                                  apply_gaussian, 
+                                  apply_clahe, 
+                                  1)
+            if img is None:
+                raise RuntimeError(f'Tiles {k} missing or corrupted for three slices in a row ({prev_z}, {z}, {next_z})')
+            
+            tile_map[k] = img
+
         tile_space = (np.array(list(tile_map.keys()))[:,1].max()+1, 
                       np.array(list(tile_map.keys()))[:,0].max()+1)
         
-        # Predict the overlap between tiles
-        pbar.set_description(f'{stack.stack_name}: Estimating overlap...')
-        overlap = estimate_tilemap_overlap(tile_space,
-                                           tile_map,
-                                           preliminary_overlap=prelim_overlap,
-                                           scale=[0.3,0.5])
-        
-        max_overlap = np.max([t.shape for t in tile_map.values()])
-        if overlap < 10:
-            # The preliminary overlap is likely too small
-            # Find a better value
-            overlap = estimate_tilemap_overlap(tile_space,
-                                               tile_map,
-                                               preliminary_overlap=max_overlap//2,
-                                               scale=[0.3,0.5])
-            prelim_overlap = int(np.ceil(overlap/100)*100)
-
-            if overlap < 10:
-                raise RuntimeError('Images may not overlap, or scale at which to search for overlap is too small.')
-
         if len(tile_map) > 1:
             # There are more than one tiles
             # Pad tiles so they are all the same shape (required by sofima)
@@ -179,47 +262,76 @@ def align_stack_xy(output_path,
                 tile_masks[k] = mask
             
             pbar.set_description(f'{stack.stack_name}: Computing elastic meshes...')
-            overlap_pad = 50
+            overlap_pad = 80
             cx, cy, coarse_mesh = get_coarse_offset(tile_map, 
                                                     tile_space,
                                                     overlap=[overlap,               # try first
                                                              overlap+overlap_pad]   # try second
                                                    )
 
-            patch_size = 160
-            if overlap > patch_size:
-                meshes = get_elastic_mesh(tile_map, 
-                                          cx, 
-                                          cy, 
-                                          coarse_mesh,
-                                          stride=stride,
-                                          patch_size=patch_size,
-                                          gamma=0.5)
+            if overlap > 160:
+                # Generally good parameters
                 render_stride=stride
-            else:
-                meshes = get_elastic_mesh(tile_map, 
-                                          cx, 
-                                          cy, 
-                                          coarse_mesh,
-                                          stride=10,
-                                          patch_size=40,
-                                          gamma=0.5)
-                render_stride=10
+                patch_size = 160
+                k0 = 0.01
+                k = 0.1
+                gamma = 0.5
 
-            # Determine margin by finding the minimum displacement in X or Y between adjacent tiles
-            # Margin is how many pixels to ignore from the tiles when rendering. Too high leaves a delimitation, too low leaves a gap
-            min_displacement = np.abs(np.concatenate([cx[0,0,0,:][~np.isnan(cx[0,0,0,:])], 
-                                                      cy[1,0,0,:][~np.isnan(cy[1,0,0,:])]])).min()
-            margin = int(min_displacement // 2 * 0.9)
+                # Determine margin by finding the minimum displacement in X or Y between adjacent tiles
+                # Margin is how many pixels to ignore from the tiles when rendering. Too high leaves a delimitation, too low leaves a gap
+                min_displacement = np.abs(np.concatenate([cx[0,0,0,:][~np.isnan(cx[0,0,0,:])], 
+                                                          cy[1,0,0,:][~np.isnan(cy[1,0,0,:])]])).min()
+                margin = min(200, int(min_displacement // 2 * 0.9))
+            else:
+                # Parameters tested for very small overlap
+                render_stride=10
+                patch_size=30
+                k0=0.07
+                k=0.2
+                gamma=0.5
+                margin=10
             
+            meshes = get_elastic_mesh(tile_map, 
+                                      cx, 
+                                      cy, 
+                                      coarse_mesh,
+                                      stride=render_stride,
+                                      patch_size=patch_size,
+                                      k0=k0,
+                                      k=k,
+                                      gamma=gamma)
+            
+            margin_map = get_tile_map_margins(tile_space, margin)
+                                      
             # Ensure that first tiles acquired are rendered last because they are sharper and should be on top
             meshes = {k:meshes[k] for k in sorted(meshes)[::-1]}
             pbar.set_description(f'{stack.stack_name}: Rendering...')
-            render_slice_xy(dataset, z-z_offset, tile_map, meshes, render_stride, tile_masks, parallelism=num_cores, margin=margin)
+            parallelism = min(num_cores, len(tile_map))
+            stitch_score = render_slice_xy(dataset, z-z_offset, tile_map, meshes, render_stride, tile_masks, parallelism=parallelism, margin_overrides=margin_map, dest_mask=dataset_mask)
         else:
             # There is only one tile, no need to compute anything
             pbar.set_description(f'{stack.stack_name}: Writing unique tile...')
-            render_slice_xy(dataset, z-z_offset, tile_map, None, None, None, parallelism=num_cores)
+            stitch_score = render_slice_xy(dataset, z-z_offset, tile_map, None, None, None, parallelism=parallelism, dest_mask=dataset_mask)
+
+        if np.any(stitch_score == 0) or np.isnan(stitch_score).any():
+            logging.warning(f'{stack.stack_name}: stitch score too low, tiles may not overlap if margin is too large (z = {z})')
+
+        doc = {
+            'stack_name': stack.stack_name,
+            'z': z,
+            'mesh_parameters':{
+                            'stride':render_stride,
+                            'patch_size':patch_size,
+                            'k0':k0,
+                            'k':k,
+                            'gamma':gamma
+                              },
+            'overlap': overlap,
+            'margin': margin,
+            'stitch_score': float(np.median(stitch_score)),
+            'missing_tile': missing_tile
+              }
+        collection_progress.insert_one(doc)
 
     pbar.set_description(f'{stack.stack_name}: done')
 
