@@ -1,7 +1,5 @@
 import numpy as np
 
-from collections import defaultdict
-
 from emalign.utils.io import load_tilemap
 from emalign.utils.arrays import pad_to_shape
 from emalign.utils.offsets import estimate_transform_sift
@@ -15,25 +13,17 @@ def get_tile_map_margins(tile_space, margin, margin_boundaries=10):
     '''
 
     # top, bottom, left, right
-    margin_overrides = defaultdict(list)
+    margin_overrides = {(x,y): [margin_boundaries]*4 for x in range(tile_space[1]) for y in range(tile_space[0])}
 
     for y in range(0, tile_space[0] - 1):
         for x in range(0, tile_space[1]):
-            if y == 0:
-                margin_overrides[(x,y)].append(margin_boundaries)
-            margin_overrides[(x,y)].append(margin)
-            margin_overrides[(x,y+1)].append(margin)
-            if y+1 == tile_space[0]-1:
-                margin_overrides[(x,y+1)].append(margin_boundaries)
+            margin_overrides[(x,y)][1] = margin
+            margin_overrides[(x,y+1)][0] = margin
 
     for x in range(0, tile_space[1] - 1):
         for y in range(0, tile_space[0]):
-            if x == 0:
-                margin_overrides[(x,y)].append(margin_boundaries)
-            margin_overrides[(x,y)].append(margin)
-            margin_overrides[(x+1,y)].append(margin)
-            if x+1 == tile_space[1]-1:
-                margin_overrides[(x+1,y)].append(margin_boundaries)
+            margin_overrides[(x,y)][3] = margin
+            margin_overrides[(x+1,y)][2] = margin
 
     return margin_overrides
 
