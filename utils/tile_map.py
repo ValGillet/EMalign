@@ -143,5 +143,10 @@ class TileMap:
                 self.tile_masks[k] = mask
         
     def estimate_overlap(self, scale=0.1):
-        self.overlap = estimate_tilemap_overlap(self.tile_map, self.tile_space, scale=scale)
-        return self.overlap
+        if len(self.tile_map) > 1:
+            self.overlap = estimate_tilemap_overlap(self.tile_map, self.tile_space, scale=scale)
+            return self.overlap
+        else:
+            print('No overlap can be computed, only one image in tile_map.')
+            self.overlap = None
+            return None
