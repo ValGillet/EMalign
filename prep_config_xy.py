@@ -143,6 +143,9 @@ def prep_align_stacks(main_dir,
     for s in stack_paths:
         logging.info(f'    {s}')
 
+    if not stack_paths:
+        sys.exit(f'No directory corresponding to the query was found at {main_dir}')
+
     # Invert stack?
     logging.info('Please check whether to invert stacks')
     invert_instructions = check_stacks_to_invert(stack_paths, resolution, num_workers, port=port)
@@ -151,8 +154,8 @@ def prep_align_stacks(main_dir,
 
     # Look for overlapping stacks
     combined_stacks = {k:v for k,v in stacks.items() if isinstance(v, list)}
-    stacks = [v for k,v in stacks.items() if not isinstance(v, list)]
-
+    stacks = [v for v in stacks.values() if not isinstance(v, list)]    
+    
     logging.info(f'Found {len(combined_stacks)} combined stack')
     processed_combined_stacks = []
     if len(combined_stacks) > 0:
@@ -160,12 +163,13 @@ def prep_align_stacks(main_dir,
         # Overlapping stacks were found, figure out overlapping regions
         for combined_stack in combined_stacks.values():
             # Detect overlapping regions
-            processed_combined_stacks += estimate_tile_map_positions(combined_stack, 
-                                                                     apply_gaussian, 
-                                                                     apply_clahe, 
-                                                                     scale=[0.3, 0.5], 
-                                                                     overlap_score_threshold=0.8,
-                                                                     rotation_threshold=5)
+            processed_combined_stacks += combined_stack
+            # processed_combined_stacks += estimate_tile_map_positions(combined_stack, 
+            #                                                          apply_gaussian, 
+            #                                                          apply_clahe, 
+            #                                                          scale=[0.3, 0.5], 
+            #                                                          overlap_score_threshold=0.8,
+            #                                                          rotation_threshold=5)
 
     logging.info('Writing stack configs')
     config_paths = {}
