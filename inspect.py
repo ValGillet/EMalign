@@ -6,7 +6,7 @@ from glob import glob
 from PIL import ImageDraw,ImageFont
 
 from .io import *
-from .stacks import *
+from .array.stacks import *
 
 
 def assemble_tile_map(tile_map):

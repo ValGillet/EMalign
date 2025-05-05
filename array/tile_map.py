@@ -115,6 +115,8 @@ class TileMap:
         if processing is not None:
             self.processing = processing
 
+        process_scheme = {}
+        
         _, self.tile_map, _ = load_tilemap({self.z: self.tile_map_paths}, 
                                             self.processing['tile_maps_invert'],
                                             self.processing['gaussian'], 

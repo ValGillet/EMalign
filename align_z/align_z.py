@@ -6,81 +6,16 @@ import tensorstore as ts
 
 from concurrent import futures
 from connectomics.common import bounding_box
-from cv2 import resize, equalizeHist
+from cv2 import resize
 from sofima import flow_field, flow_utils, map_utils, mesh, warp
 from tqdm import tqdm
 
-from emprocess.utils.transform import rotate_image
-
-from .io import get_data_samples, get_dataset_attributes
-from .arrays import compute_mask, pad_to_shape
-from .offsets import *
-from emalign.utils.tile_map_positions import estimate_transform_sift
+from ..io.store import get_data_slice
+from ..array.pad import pad_to_shape
 
 
-def get_data(dataset, z, offset, target_scale, rotation_angle=0):
-    try:
-        data = dataset[z, ...].read().result()
-        data = equalizeHist(data)
-
-        if target_scale < 1:
-            data = resize(data, None, fx=target_scale, fy=target_scale)
-
-        if rotation_angle != 0:
-            data = rotate_image(data, rotation_angle)
-
-        data = np.pad(data, np.stack([offset[1:], [0,0]]).T)
-        return data
-    except Exception as e:
-        raise RuntimeError(e)
-
-
-def compute_datasets_offsets(datasets, 
-                             offsets,
-                             range_limit,
-                             scale, 
-                             filter_size,
-                             step_slices,
-                             yx_target_resolution,
-                             pad_offset=(0,0),
-                             num_workers=0):
-    
-    offsets_yx = [[0,0]]
-    fs = []
-    with futures.ThreadPoolExecutor(num_workers) as tpe:
-        for dataset in datasets:
-            fs.append(tpe.submit(get_data_samples, dataset, step_slices, yx_target_resolution))
-
-        fs = fs[::-1]
-
-        # Do very first dataset
-        data = fs.pop().result()
-        inner_offsets = [estimate_rough_z_offset(data[i-1], data[i], scale=scale, range_limit=range_limit, filter_size=filter_size)[0] 
-                        for i in range(1, len(data))]
-        # Offset between first and last image of the first dataset
-        last_inner_offset = np.sum(inner_offsets, axis=0)
-        rotation_angle = 0
-        for _ in tqdm(range(len(fs)),
-                      desc=f'Calculating offset between {len(datasets)} datasets.'):
-            # Reference is the latest image before the current dataset
-            prev = rotate_image(data[-1], rotation_angle)
-            data = fs.pop().result()
-
-            _, rotation_angle, _ = estimate_transform_sift(prev, data[0], 0.3)
-            # Calculate offset to the last stack 
-            offset_to_last, _ = estimate_rough_z_offset(prev, rotate_image(data[0], rotation_angle), scale=scale, range_limit=range_limit, filter_size=filter_size)
-            offsets_yx.append(offset_to_last + last_inner_offset)
-
-            # Offset between first and last image (to account for differences between first images of different stacks and drift)
-            last_inner_offset = np.sum([estimate_rough_z_offset(data[i-1], data[i], scale=scale, range_limit=range_limit, filter_size=filter_size)[0] 
-                                    for i in range(1, len(data))], axis=0)
-
-    offsets_yx = np.array(offsets_yx)
-
-    yx_cumsum = np.cumsum(offsets_yx, axis=0)
-    offsets[:, 1:] += (yx_cumsum - np.min(yx_cumsum, axis=0)).astype(int)
-    offsets[:, 1:] += np.array(pad_offset)
-    return offsets
+# TODO: remove need for computing masks if they exist.
+# change _compute_flow to use masks better
 
 
 def _compute_flow(dataset, 
@@ -92,8 +27,7 @@ def _compute_flow(dataset,
                   range_limit,
                   first_slice=None,
                   target_scale=1,
-                  rotation_angle=0,
-                  num_threads=0):
+                  rotation_angle=0):
 
     dataset_name = dataset.kvstore.path.split('/')[-2]
 
@@ -107,11 +41,11 @@ def _compute_flow(dataset,
     if first_slice is None:
         # Use dataset's first slice to compute flow from.
         start = 1
-        prev = get_data(dataset, start-1, offset, target_scale)
+        prev = get_data_slice(dataset, start-1, offset, target_scale)
 
         while not prev.any():
             start += 1
-            prev = get_data(dataset, start-1, offset, target_scale)
+            prev = get_data_slice(dataset, start-1, offset, target_scale)
     else:
         # Use provided first slice to compute flow from. Could be slice of a previous dataset
         start = 0
@@ -123,7 +57,7 @@ def _compute_flow(dataset,
     for z in tqdm(range(start, dataset.shape[0]),
                     position=0,
                     desc=f'{dataset_name}: Computing flow (scale={scale})'):
-        curr = get_data(dataset, z, offset, target_scale, rotation_angle=rotation_angle)
+        curr = get_data_slice(dataset, z, offset, target_scale, rotation_angle=rotation_angle)
 
         if not curr.any():
             # If empty slice, compare to the next one

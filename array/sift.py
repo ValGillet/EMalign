@@ -1,28 +1,7 @@
-import numpy as np
 import cv2
+import numpy as np
 
-from cv2 import resize
-from sofima import flow_field
 from emprocess.utils.img_proc import downsample
-
-from emalign.utils.arrays import *
-
-
-def xy_offset_to_pad(offset):
-    pad = np.zeros([2,2], dtype=int)
-    x,y = [int(i) for i in offset]
-    
-    if y > 0:
-        pad[0][1] = y
-    else:
-        pad[0][0] = abs(y)
-    
-    if x > 0:
-        pad[1][1] = x
-    else:
-        pad[1][0] = abs(x)
-
-    return pad
 
 
 def estimate_transform_sift(img1, img2, scale=1, refine_estimate=True):
@@ -33,7 +12,6 @@ def estimate_transform_sift(img1, img2, scale=1, refine_estimate=True):
     '''
 
     # knnMatch will return an error if there are too many keypoints so we limit their number
-    # see
     max_features=250000
 
     # Downsample images for faster computations
@@ -86,33 +64,3 @@ def estimate_transform_sift(img1, img2, scale=1, refine_estimate=True):
         return estimate_transform_sift(img1, img2, scale=scale+0.1, refine_estimate=False)
     else:
         return xy_offset, theta, robust_estimate
-
-
-def estimate_rough_z_offset(img1, img2, scale=0.1, range_limit=10, filter_size=5, patch_factor=1): 
-    '''
-    Based on sofima.stitch_rigid._estimate_offset
-    '''
-    img1_ds = resize(img1, None, fx=scale, fy=scale)
-    img2_ds = resize(img2, None, fx=scale, fy=scale) 
-
-    mask_1 = compute_mask(img1_ds, filter_size, range_limit)
-    mask_2 = compute_mask(img2_ds, filter_size, range_limit)
-
-    # Pad to the same shape to avoid errors with flow computation
-    # Pad after computing the masks to save time
-    target_shape = np.max([img1_ds.shape, img2_ds.shape], axis=0)
-
-    img1_ds = pad_to_shape(img1_ds, target_shape)
-    img2_ds = pad_to_shape(img2_ds, target_shape)
-    mask_1 = pad_to_shape(mask_1, target_shape, pad_value=1)
-    mask_2 = pad_to_shape(mask_2, target_shape, pad_value=1)
-
-    mfc = flow_field.JAXMaskedXCorrWithStatsCalculator()
-    xo, yo, _, pr = mfc.flow_field(
-        img1_ds, img2_ds, 
-        pre_mask=mask_1, post_mask=mask_2, 
-        patch_size=tuple((np.array(img1_ds.shape)/patch_factor).astype(int).tolist()), 
-        step=tuple((np.array(img1_ds.shape)/patch_factor).astype(int).tolist())
-    ).squeeze()
-
-    return np.array([yo, xo])/scale, pr

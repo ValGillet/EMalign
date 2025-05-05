@@ -6,106 +6,12 @@ import logging
 from tqdm import tqdm
 from itertools import combinations
 
-from emprocess.utils.transform import rotate_image
 from emalign.utils.io import load_tilemap
 from emalign.utils.stacks import Stack
 from emalign.utils.offsets import estimate_transform_sift, xy_offset_to_pad
 from emalign.utils.arrays import pad_to_shape
 
 logging.basicConfig(level=logging.INFO)
-
-
-def get_overlap(img1, img2, xy_offset, rotation_angle):
-
-    '''
-    Extract overlapping parts of two images based on an offset and rotation from img2 to img1.
-    '''
-
-    # Estimate overlap
-    # Masks and images are padded to same shape to facilitate comparison
-    # I'm sure there is a smartest way but this works
-    mask1 = np.ones_like(img1)
-    mask1 = rotate_image(img1, -rotation_angle)
-    img1 = rotate_image(img1, -rotation_angle)
-
-    mask2 = np.ones_like(img2).astype(bool)
-    img1=np.pad(img1, xy_offset_to_pad(-xy_offset))
-    img2=np.pad(img2, xy_offset_to_pad(xy_offset))
-
-    mask1=np.pad(mask1, xy_offset_to_pad(-xy_offset))
-    mask2=np.pad(mask2, xy_offset_to_pad(xy_offset))
-
-    max_shape = np.max([img1.shape, img2.shape], axis=0)
-
-    img1 = pad_to_shape(img1, max_shape)
-    img2 = pad_to_shape(img2, max_shape)
-    mask1 = pad_to_shape(mask1, max_shape)
-    mask2 = pad_to_shape(mask2, max_shape)
-    
-    mask = mask1.astype(bool) & mask2.astype(bool)
-
-    if mask.any():
-        y1,x1 = np.min(np.where(mask), axis=1) 
-        y2,x2 = np.max(np.where(mask), axis=1) 
-
-        return img1[y1:y2, x1:x2], img2[y1:y2, x1:x2], mask[y1:y2, x1:x2]
-    else:
-        return None
-    
-
-def compute_laplacian_var_diff(overlap_1, overlap_2, mask):
-
-    '''
-    Compute a metric ([0,1]) describing how well two arrays overlap, based on laplacian filter.
-    If score is 1, overlapping regions have the same edge content and therefore overlap well.
-    '''
-    
-    mask = np.ones_like(overlap_1).astype(bool) if mask is None else mask
-
-    laplacian1 = cv2.Laplacian(overlap_1, cv2.CV_64F)[mask]
-    laplacian2 = cv2.Laplacian(overlap_2, cv2.CV_64F)[mask]
-
-    lap_var1 = np.var(laplacian1)
-    lap_var2 = np.var(laplacian2)
-
-    # Calculate an index of difference in edge content (variance of laplacian)
-    # Between 0 and 1, low means exact same content, 1 means different
-    return 1 - abs(lap_var1 - lap_var2) / max(lap_var1, lap_var2)
-
-
-def check_overlap(img1, img2, xy_offset, theta, threshold=0.5, scale=(0.3, 0.5), refine=True):
-
-    '''
-    Compute a metric describing how well images overlap, based on a given offset and rotation. 
-    '''
-
-    # Index of sharpness using Laplacian
-    overlap = get_overlap(img1, img2, xy_offset, theta)
-
-    if overlap is not None:
-        overlap1, overlap2, mask = overlap
-
-        lap_variance_diff = compute_laplacian_var_diff(overlap1, overlap2, mask)
-
-        if refine and lap_variance_diff < threshold:
-            logging.debug('Refining overlap estimation...')
-            # Retry the overlap, it can often get better
-            try:
-                xy_offset, theta = estimate_transform_sift(overlap1, overlap2, scale=scale[0])
-            except:
-                xy_offset, theta = estimate_transform_sift(overlap1, overlap2, scale=scale[1])
-            res = get_overlap(overlap1, overlap2, xy_offset, theta)
-            
-            if res is not None:
-                overlap1, overlap2, mask = res
-                lap_variance_diff = compute_laplacian_var_diff(overlap1, overlap2, mask)
-            else:
-                lap_variance_diff = 0
-    else:
-        # Images do not overlap (displacement is larger than image itself)
-        lap_variance_diff = 0
-
-    return lap_variance_diff
 
 
 def get_tile_positions_graph(G):
