@@ -179,10 +179,10 @@ def align_stack_xy(output_path,
         pbar.set_description(f'{stack.stack_name}: Loading tile_map...')
         tm = stack.get_tile_map(z, apply_gaussian, apply_clahe)
         tile_map = tm.tile_map
-        overlap = tm.estimate_overlap(scale=0.1)
         
         if len(tile_map) > 1:
             # There are more than one tiles            
+            overlap = tm.estimate_overlap(scale=0.1)
             pbar.set_description(f'{stack.stack_name}: Computing elastic meshes...')
             # Compute overlap for better coarse mesh estimation
             overlap_pad = 80
@@ -231,29 +231,37 @@ def align_stack_xy(output_path,
             parallelism = min(num_cores, len(tile_map))
             stitch_score = render_slice_xy(dataset, z-z_offset, tile_map, meshes, render_stride, tm.tile_masks, 
                                            parallelism=parallelism, margin_overrides=margin_map, dest_mask=dataset_mask)
+            doc = {
+                'stack_name': stack.stack_name,
+                'z': z,
+                'tile_space': [int(i) for i in tm.tile_space],
+                'mesh_parameters':{
+                                'stride':render_stride,
+                                'patch_size':patch_size,
+                                'k0':k0,
+                                'k':k,
+                                'gamma':gamma
+                                },
+                'overlap': overlap,
+                'margin': margin,
+                'stitch_score': float(np.median(stitch_score)),
+                'missing_tile': tm.missing_tiles
+                }
         else:
             # There is only one tile, no need to compute anything
             pbar.set_description(f'{stack.stack_name}: Writing unique tile...')
-            stitch_score = render_slice_xy(dataset, z-z_offset, tile_map, None, None, None, parallelism=parallelism, dest_mask=dataset_mask)
+            stitch_score = render_slice_xy(dataset, z-z_offset, tile_map, None, None, tm.tile_masks, dest_mask=dataset_mask)
+            doc = {
+                'stack_name': stack.stack_name,
+                'z': z,
+                'tile_space': [int(i) for i in tm.tile_space],
+                'missing_tile': tm.missing_tiles
+                }
 
         if np.any(stitch_score == 0) or np.isnan(stitch_score).any():
             logging.warning(f'{stack.stack_name}: stitch score too low, tiles may not overlap if margin is too large (z = {z})')
 
-        doc = {
-            'stack_name': stack.stack_name,
-            'z': z,
-            'mesh_parameters':{
-                            'stride':render_stride,
-                            'patch_size':patch_size,
-                            'k0':k0,
-                            'k':k,
-                            'gamma':gamma
-                              },
-            'overlap': overlap,
-            'margin': margin,
-            'stitch_score': float(np.median(stitch_score)),
-            'missing_tile': tm.missing_tile
-              }
+        
         collection_progress.insert_one(doc)
 
     pbar.set_description(f'{stack.stack_name}: done')
