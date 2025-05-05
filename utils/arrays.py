@@ -24,3 +24,8 @@ def pad_to_shape(array, target_shape, direction=[1,1], pad_value=0):
         d = max(0, d)
         pad[i][d] = pad_size[i]
     return np.pad(array, pad, constant_values=pad_value)
+
+
+def homogenize_arrays_shape(arrs):
+    max_shape = np.max([a.shape for a in arrs],axis=0)
+    return [pad_to_shape(a, max_shape) for a in arrs]
