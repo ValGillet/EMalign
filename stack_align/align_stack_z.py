@@ -155,9 +155,9 @@ def align_stack_z(destination_path,
     # The ratio is what matters for how much the data is deformed
     # However smaller numbers might limit the possible deviation of the mesh
     # Good values:
-    # k0 = 0.01 # inter-section springs (elasticity). High k0 results in images that tend to "fold" onto themselves
-    # k = 0.4 # intra-section springs (elasticity). Increase if data deforms too much
-    # gamma = 0.5 # dampening factor. Increase if data drift over time
+    # k0 # inter-section springs (elasticity). High k0 results in images that tend to "fold" onto themselves
+    # k # intra-section springs (elasticity). Increase if data deforms too much
+    # gamma # dampening factor. Increase if data drift over time
 
     mesh_config = mesh.IntegrationConfig(dt=0.001, gamma=gamma, k0=k0, k=k, stride=(stride, stride), num_iters=1000,
                                          max_iters=100000, stop_v_max=0.005, dt_max=1000, start_cap=0.01,
@@ -211,7 +211,6 @@ def align_stack_z(destination_path,
             inv_z = z + 1 - skipped
 
         # Warp data in parallel. Use num_threads minus the 4 threads used for reading and writing
-        # warp_subvolume is the bottleneck here, so 4 threads for read and write is most likely enough to keep up
         aligned = warp.warp_subvolume(data[None, None, ...], data_bbox, inv_map[:, inv_z:inv_z+1, ...], 
                                         flow_bbox, stride, data_bbox, 'lanczos', parallelism=num_threads)
         aligned = aligned[0,0,...]
