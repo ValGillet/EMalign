@@ -103,7 +103,7 @@ def inspect_dataset(
             except:
                 continue
     elif mode == 'all_ds':
-        dataset_paths = sorted(glob(os.path.join(dataset_path, '*')))
+        dataset_paths = [d for d in sorted(glob(os.path.join(dataset_path, '*'))) if '_mask' not in d]
 
         data = {}
         for dataset_path in dataset_paths:
