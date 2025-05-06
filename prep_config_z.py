@@ -15,7 +15,7 @@ logging.getLogger('absl').setLevel(logging.WARNING)
 logging.getLogger('jax._src.xla_bridge').setLevel(logging.WARNING)
 
 
-def prep_config_z(config_path,
+def prep_config_z(config_paths,
                   config_z_path,
                   num_workers, 
                   port):
@@ -68,7 +68,6 @@ def prep_config_z(config_path,
                                        pad_offset,
                                        num_workers)
 
-    
     reference = None
     first_slice_z = None
     aligned_slices = []

@@ -1,3 +1,5 @@
+import numpy as np
+
 from sofima import warp
 
 from .utils import check_stitch
@@ -29,6 +31,7 @@ def render_slice_xy(destination,
         stitch_score = check_stitch(warped_tiles, margin)
     else:
         stitched = list(tile_map.values())[0]
+        mask = np.ones_like(list(tile_masks.values())[0]).astype(bool)
         stitch_score = 1
     
     if return_render:

@@ -4,6 +4,7 @@ import sys
 from concurrent import futures
 from glob import glob
 from PIL import ImageDraw,ImageFont
+from tqdm import tqdm
 
 from .io import *
 from .array.stacks import *

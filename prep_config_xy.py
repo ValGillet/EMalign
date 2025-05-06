@@ -142,6 +142,9 @@ def prep_align_stacks(main_dir,
     logging.info(f'Found {len(stack_paths)} directories corresponding to resolution {resolution}: ')
     for s in stack_paths:
         logging.info(f'    {s}')
+        
+    if not stack_paths:
+        sys.exit(f'No directory corresponding to the query was found at {main_dir}')
 
     # Invert stack?
     logging.info('Please check whether to invert stacks')
