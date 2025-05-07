@@ -4,49 +4,45 @@ import numpy as np
 from emprocess.utils.transform import rotate_image  
 
 from .sift import estimate_transform_sift
-from .pad import xy_offset_to_pad, pad_to_shape
 from .utils import compute_laplacian_var_diff
 
 
-def get_overlap(img1, 
-                img2, 
-                xy_offset, 
-                rotation_angle):
-
+def get_overlap(img1, img2, offset, rotation=0, pad=0, homogenize_shapes=False):
     '''
     Extract overlapping parts of two images based on an offset and rotation from img2 to img1.
     '''
-
-    # Estimate overlap
-    # Masks and images are padded to same shape to facilitate comparison
-    # I'm sure there is a smartest way but this works
-    mask1 = np.ones_like(img1)
-    mask1 = rotate_image(img1, -rotation_angle)
-    img1 = rotate_image(img1, -rotation_angle)
-
-    mask2 = np.ones_like(img2).astype(bool)
-    img1=np.pad(img1, xy_offset_to_pad(-xy_offset))
-    img2=np.pad(img2, xy_offset_to_pad(xy_offset))
-
-    mask1=np.pad(mask1, xy_offset_to_pad(-xy_offset))
-    mask2=np.pad(mask2, xy_offset_to_pad(xy_offset))
-
-    max_shape = np.max([img1.shape, img2.shape], axis=0)
-
-    img1 = pad_to_shape(img1, max_shape)
-    img2 = pad_to_shape(img2, max_shape)
-    mask1 = pad_to_shape(mask1, max_shape)
-    mask2 = pad_to_shape(mask2, max_shape)
+        
+    if rotation != 0:
+        if img2.dtype == bool:
+            img2 = rotate_image(img2.astype(np.uint8), rotation).astype(bool)
+        else:
+            img2 = rotate_image(img2, rotation)
     
-    mask = mask1.astype(bool) & mask2.astype(bool)
-
-    if mask.any():
-        y1,x1 = np.min(np.where(mask), axis=1) 
-        y2,x2 = np.max(np.where(mask), axis=1) 
-
-        return img1[y1:y2, x1:x2], img2[y1:y2, x1:x2], mask[y1:y2, x1:x2]
+    offset = offset[::-1]
+    if offset[1] > 0:
+        ox = img2.shape[1] - int(abs(offset[1])) + pad
+        crop2 = img2[:, -ox:]
+        crop1 = img1[:, :ox]
     else:
-        return None
+        ox = img1.shape[1] - int(abs(offset[1])) + pad
+        crop1 = img1[:, -ox:]
+        crop2 = img2[:, :ox]
+
+    if offset[0] < 0:
+        oy = img1.shape[0] - int(abs(offset[0])) + pad
+        crop1 = crop1[-oy:, :]
+        crop2 = crop2[:oy, :]
+    else:
+        oy = img2.shape[0] - int(abs(offset[0])) + pad
+        crop1 = crop1[:oy, :]
+        crop2 = crop2[-oy:, :]
+
+    if homogenize_shapes:
+        y, x = np.min([crop1.shape, crop2.shape], axis=0)
+        crop1 = crop1[:y,:x]
+        crop2 = crop2[:y,:x]
+
+    return crop1, crop2
 
 
 def check_overlap(img1, 
