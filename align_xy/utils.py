@@ -4,7 +4,16 @@ import cv2
 import numpy as np
 import warnings
 
-from ..array.utils import compute_laplacian_var_diff, get_overlap
+from ..array.utils import compute_laplacian_var_diff
+from ..array.overlap import get_overlap
+
+
+def mask_to_mesh(mask, stride):
+    y, x = np.max([np.array(mask.shape) % stride, np.ones(mask.ndim)], axis=0).astype(int)
+    x_target = np.repeat(mask[None, None, :-y:stride, :-x:stride], 2, axis=0).astype(np.float32) - 1
+    x_target[x_target<0] = np.nan
+    return x_target
+
 
 def check_stitch(warped_tiles, margin):
 
@@ -19,16 +28,14 @@ def check_stitch(warped_tiles, margin):
 
             offset = np.array([x1-x2, y1-y2])
             
-            overlap = get_overlap(left, right, offset, 0)
+            overlap1, overlap2 = get_overlap(left, right, offset, 0, homogenize_shapes=True)
 
-            if overlap is None:
+            if overlap1.size == 0 or overlap2.size == 0:
                 overlap_score = 0
             else:
-                overlap1, overlap2, _ = overlap
                 try:
                     overlap_score = compute_laplacian_var_diff(overlap1[:, :-margin], 
-                                                               overlap2[:, margin:],
-                                                               None)
+                                                               overlap2[:, margin:])
                 except cv2.error as e:
                     if e.err == '!_src.empty()':
                         overlap_score = 0
@@ -44,16 +51,14 @@ def check_stitch(warped_tiles, margin):
             
             offset = np.array([x1-x2, y1-y2])
             
-            overlap = get_overlap(bot, top, offset, 0)
+            overlap1, overlap2 = get_overlap(bot, top, offset, 0, homogenize_shapes=True)
 
-            if overlap is None:
+            if overlap1.size == 0 or overlap2.size == 0:
                 overlap_score = 0
             else:
-                overlap1, overlap2, _ = overlap
                 try:
                     overlap_score = compute_laplacian_var_diff(overlap1[:-margin, :], 
-                                                               overlap2[margin:, :],
-                                                               None)
+                                                               overlap2[margin:, :])
                 except cv2.error as e:
                     if e.err == '!_src.empty()':
                         overlap_score = 0
