@@ -1,8 +1,9 @@
 import numpy as np
 
-from emalign.utils.io import load_tilemap
-from emalign.utils.arrays import pad_to_shape
-from emalign.utils.offsets import estimate_transform_sift
+from ..array.sift import estimate_transform_sift
+from ..array.utils import pad_to_shape
+from ..io.tif import load_tilemap
+
 
 
 def get_tile_map_margins(tile_space, margin, margin_boundaries=10):
@@ -115,12 +116,14 @@ class TileMap:
         if processing is not None:
             self.processing = processing
 
-        process_scheme = {}
-        
+        process_scheme = {
+                        "gaussian": {"kernel_size": [3,3], "sigma": 1}, 
+                        "clahe": {"clip_limit": 2, "tile_grid_size": [10,10]}
+                        }
+        process_scheme = {k:v for k,v in process_scheme.items() if self.processing.get(k)}
         _, self.tile_map, _ = load_tilemap({self.z: self.tile_map_paths}, 
                                             self.processing['tile_maps_invert'],
-                                            self.processing['gaussian'], 
-                                            self.processing['clahe'],
+                                            process_scheme,
                                             self.processing['scale'],
                                             skip_missing=False)
         
