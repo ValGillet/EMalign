@@ -5,7 +5,6 @@ from ..array.utils import pad_to_shape
 from ..io.tif import load_tilemap
 
 
-
 def get_tile_map_margins(tile_space, margin, margin_boundaries=10):
 
     '''
