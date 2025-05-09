@@ -4,6 +4,7 @@ from glob import glob
 from emprocess.utils.io import load_tif
 from .nglancer import *
 
+
 def check_stacks_to_invert(stack_list, 
                            num_workers=1, 
                            bind_address='localhost', 
