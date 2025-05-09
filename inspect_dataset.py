@@ -1,14 +1,12 @@
 import argparse
 import json
-import neuroglancer
-import numpy as np
 import os
 import tensorstore as ts
 
 from glob import glob
-from time import sleep
 
-from emalign.utils.io import get_ordered_datasets
+from emalign.align_z.utils import get_ordered_datasets
+from emalign.visualize.nglancer import add_layers, start_nglancer_viewer
 
 
 def read_data(
@@ -44,44 +42,48 @@ def read_data(
     return data
 
 
-def show_data(layers,
-              port=55555):
-
-    neuroglancer.set_server_bind_address(bind_address='localhost', bind_port=port)
-    dimensions = neuroglancer.CoordinateSpace(names=['x', 'y', 'z'], units='nm', scales=[50, 50, 50])
-    viewer = neuroglancer.Viewer()
-
-    with viewer.txn() as s:
-        s.dimensions = dimensions
-
-        for i, (name, data) in enumerate(layers.items()):
-            layer = neuroglancer.ImageLayer(source=neuroglancer.LocalVolume(data.T, dimensions))
-            s.layers[name] = layer
-            s.layers[name].visible = i == 0
-        s.layout = 'xy'
-
-    url = viewer.get_viewer_url()
-    print(url)
-    input('Press ENTER to quit')
-
-
 def inspect_dataset(
             dataset_path,
             data_range=[0],
             keep_missing=False,
             project_configs=[],
             mode=None,
-            port=55555):
+            bind_port=55555):
+    '''Display images from a zarr store.
+
+    Loads images from a zarr store as defined by the data range, and display it in a neuroglancer viewer.
+    Viewer's bind_address is currently hard-coded to be localhost.
+
+    Args:
+        dataset_path (str): Absolute path to the zarr store to read data from.
+        data_range (list of `int`, optional): Range of z indices to read data from: [inclusive_min, exclusive_max]
+            If only one is int given, it will be considered the start and the end will be the last possible index. Defaults to [0].
+        keep_missing (bool, optional): Whether to skip fully black images. Defaults to False.
+        project_configs (list of `str`, optional): List of absolute paths to configuration files containing information about datasets to display, when mode=z_transitions. Defaults to [].
+        mode (str, optional): Mode to use to display data. If no mode is given, will simply read data from the path provided.
+            One of: `None`, z_transitions, all_ds. Defaults to None.
+            z_transitions: Determines from project_configs all the z indices where a transition occurred (i.e. two stacks were aligned) and show images around transitions.
+            all_ds: Reads data within data_range from all the datasets found in the provided store.
+        bind_port (int, optional): Port to bind the neuroglancer viewer to. Defaults to 55555.
+    '''
     
     modes = ['z_transitions', 'all_ds']
-    
     if mode is not None and mode not in modes:
         raise ValueError(f'Invalid mode. Must be one of: {modes}')
     
-    dataset_name = os.path.basename(os.path.abspath(dataset_path))
+    # Start viewer
+    viewer = start_nglancer_viewer(bind_address='localhost',
+                                   bind_port=bind_port)
+    print('Neuroglancer viewer: ' + viewer.get_viewer_url())
+    print('Please wait for images to load (CTRL+C to cancel).')
     
+    # Prepare data
+    dataset_name = os.path.basename(os.path.abspath(dataset_path))
     if mode is None:
-        data = {dataset_name: read_data(dataset_path, data_range=tuple(data_range), keep_missing=keep_missing)}    
+        d = read_data(dataset_path, data_range=tuple(data_range), keep_missing=keep_missing)
+        add_layers([d], 
+                   viewer, 
+                   names=[dataset_name])
     elif mode == 'z_transitions':
         dataset_paths = []
         config_paths = glob(os.path.join(project_configs, '*.json'))
@@ -94,23 +96,32 @@ def inspect_dataset(
         _, z_offsets = get_ordered_datasets(dataset_paths)
 
         window = 20
-        data = {}
         for z, _, _ in z_offsets:
             data_range = [int(z - max(1, window/2)), int(z + max(1, window/2))]
 
             try:
-                data.update({f'{dataset_name}_{z}': read_data(dataset_path, data_range=tuple(data_range), keep_missing=keep_missing)})
+                d = read_data(dataset_path, data_range=tuple(data_range), keep_missing=keep_missing)
             except:
                 continue
+            visible = z == z_offsets[0]
+            add_layers([d], 
+                       viewer, 
+                       names=[f'{dataset_name}_{z}'], 
+                       visible=visible,
+                       clear_viewer=False)
     elif mode == 'all_ds':
         dataset_paths = [d for d in sorted(glob(os.path.join(dataset_path, '*'))) if '_mask' not in d]
 
-        data = {}
         for dataset_path in dataset_paths:
             dataset_name = os.path.basename(dataset_path)
-            data.update({dataset_name: read_data(dataset_path, data_range=tuple(data_range), keep_missing=keep_missing)})     
-
-    show_data(data, port=port)
+            d = read_data(dataset_path, data_range=tuple(data_range), keep_missing=keep_missing)
+            visible = dataset_path == dataset_paths[0]
+            add_layers([d], 
+                       viewer, 
+                       names=[dataset_name], 
+                       visible=visible,
+                       clear_viewer=False)
+    input('All data loaded. Press ENTER or ESCAPE to exit.')
 
 
 if __name__ == '__main__':
@@ -151,7 +162,7 @@ if __name__ == '__main__':
                         help='Visualization mode. One of: z_transitions, all_ds')
     parser.add_argument('--port',
                         metavar='PORT',
-                        dest='port',
+                        dest='bind_port',
                         required=False,
                         type=int,
                         default=55555,
