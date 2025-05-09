@@ -15,97 +15,13 @@ import numpy as np
 import pandas as pd
 import sys
 
-from emalign.utils.stacks import Stack
-from emalign.utils.io import *
-from emalign.utils.align_xy import *
-from emalign.utils.inspect import *
-from emalign.utils.tile_map_positions import estimate_tile_map_positions
+from .align_xy.tile_map_positions import estimate_tile_map_positions
+from .align_xy.prep import find_offset_from_main_config, get_stacks, check_stacks_to_invert
+from .io.volumescope import get_tilesets
 
 logging.basicConfig(level=logging.INFO)
 logging.getLogger('absl').setLevel(logging.WARNING)
 logging.getLogger('jax._src.xla_bridge').setLevel(logging.WARNING)
-
-
-def get_stacks(stack_paths, invert_instructions):
-
-    # Load stacks
-    stacks = []
-    for stack_path in stack_paths:
-        stack = Stack(stack_path)
-        stack._get_tilemaps_paths()
-        for k in stack.tile_maps_invert.keys():
-            stack.tile_maps_invert[k]=invert_instructions[stack.stack_name]
-        stacks.append(stack) 
-
-    # Split stacks if there are overlaps
-    unique_slices = sorted(np.unique(np.concatenate([stack.slices for stack in stacks])).tolist())
-    df = pd.DataFrame({'z': unique_slices, 
-                    'stack_name': [[] for _ in range(len(unique_slices))], 
-                    'tile_paths':[[] for _ in range(len(unique_slices))]
-                    })
-
-    for stack in stacks:
-        for z in stack.slices:
-            # Join existing name and this stack at that slice
-            df.loc[df.z == z, ['stack_name']] += [[stack.stack_name]]
-
-            # Concatenate tile paths
-            df.loc[df.z == z, ['tile_paths']] += [[stack.slice_to_tilemap[z]]]
-
-    df['group'] = df['stack_name'].ne(df['stack_name'].shift()).cumsum()
-
-    new_stacks = {}
-    for group, group_df in df.groupby('group'):    
-        stack_names = group_df.stack_name.iloc[0]
-
-        if len(stack_names) == 1:
-            # Stack name becomes name + group (gives an idea of order too)
-            new_stack_name = str(group).zfill(2) + '_' + stack_names[0]
-
-            tile_map = {}
-            for z in group_df.z:
-                tile_map[z] = group_df.loc[group_df.z == z, 'tile_paths'].item()[0]
-            
-            stack = Stack()
-            stack.stack_name = new_stack_name
-            stack._set_tilemaps_paths(tile_map)
-            stack.tile_maps_invert = {k: invert_instructions[stack_names[0]] for k in tile_map[z].keys()}
-
-            new_stacks[new_stack_name] = stack
-        
-        else:
-            combined_stack_name = '_'.join([str(group).zfill(2)] + stack_names)
-            pair = []
-            for i in range(len(stack_names)):
-                new_stack_name = str(group).zfill(2) + '_' + stack_names[i]
-                
-                tile_map = {}
-                for z in group_df.z:
-                    tile_map[z] = group_df.loc[group_df.z == z, 'tile_paths'].item()[i]
-
-                stack = Stack()
-                stack.stack_name = new_stack_name
-                stack._set_tilemaps_paths(tile_map)
-                stack.tile_maps_invert = {k: invert_instructions[stack_names[i]] for k in tile_map[z].keys()}
-
-                pair.append(stack)
-            new_stacks[combined_stack_name] = pair
-        
-    return new_stacks
-
-
-def find_offset_from_previous(main_config_path):
-    with open(main_config_path, 'r') as f:
-        main_config = json.load(f)
-
-    z_offsets = []
-    for stack_config in main_config['stack_configs'].values():
-        with open(stack_config, 'r') as f:
-            stack_config = json.load(f)
-        
-        z_offsets.append(stack_config['z_end'])
-
-    return max(z_offsets) + 1
 
 
 def prep_align_stacks(main_dir,
@@ -132,7 +48,7 @@ def prep_align_stacks(main_dir,
         sys.exit()
 
     if prev_cfg is not None:
-        offset[0] = find_offset_from_previous(prev_cfg)
+        offset[0] = find_offset_from_main_config(prev_cfg)
         logging.info(f'Determined z offset from previous dataset: {offset[0]}')
 
     # Find tilesets with desired resolution
@@ -154,7 +70,7 @@ def prep_align_stacks(main_dir,
 
     # Look for overlapping stacks
     combined_stacks = {k:v for k,v in stacks.items() if isinstance(v, list)}
-    stacks = [v for k,v in stacks.items() if not isinstance(v, list)]
+    stacks = [v for v in stacks.values() if not isinstance(v, list)]
 
     logging.info(f'Found {len(combined_stacks)} combined stack')
     processed_combined_stacks = []
