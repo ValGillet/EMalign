@@ -17,6 +17,15 @@ from ..align_z.utils import get_ordered_datasets
 
 
 def find_offset_from_main_config(main_config_path):
+    '''Find z offset of a new stack based on the config of a preceding one.
+
+    Args:
+        main_config_path (str): Absolute path to a main_config JSON file as written by prep_config_z.json
+
+    Returns:
+        int: Z offset of a new stack that would follow the one represented by main_config (i.e. previous stack end + 1)
+    '''
+
     with open(main_config_path, 'r') as f:
         main_config = json.load(f)
 
@@ -30,11 +39,19 @@ def find_offset_from_main_config(main_config_path):
     return max(z_offsets) + 1
 
 
-def get_stacks(stack_paths, invert_instructions):
+def get_stacks(stack_paths, 
+               invert_instructions):
+    '''Get segments of potentially overlapping stacks from paths. 
 
-    '''
-    Use a list of tileset paths and invert instructions to fetch stacks and split them into overlapping segments.
+    Use a list of tileset paths to fetch stacks and split them into overlapping segments.
     Invert instructions are used to determine whether images in a tilest need to be inverted.
+
+    Args:
+        stack_paths (list of `str`): List of paths to folders each containing images from a single stack.
+        invert_instructions (dict of `bool`): Dictionary from stack to boolean determining whether to invert images in that stack.
+
+    Returns:
+        dict: Dictionary from stack name to Stack object. Value may be a list of Stack objects if they share Z indices.
     '''
 
     # Load stacks
@@ -117,7 +134,7 @@ def check_stacks_to_invert(stack_list,
         **kwargs: Arguments passed to `start_nglancer_viewer`.
 
     Returns:
-        to_invert (dict): Dictionary from stack_names to decision to invert: either True or False.
+        dict: Dictionary from stack_names to decision to invert: either True or False.
     '''
 
     viewer = start_nglancer_viewer(**kwargs)
