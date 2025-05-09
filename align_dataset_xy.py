@@ -1,4 +1,5 @@
 import os
+
 # To prevent running out of memory because of preallocation
 os.environ['XLA_PYTHON_CLIENT_PREALLOCATE'] = 'false'
 
@@ -18,11 +19,8 @@ import logging
 import sys
 from tqdm import tqdm
 
-from emalign.utils.io import *
-from emalign.utils.align_xy import *
-from emalign.utils.inspect import *
-from emalign.utils.stacks import parse_stack_info
-from emalign.stack_align.align_stack_xy import align_stack_xy
+from emalign.arrays.stacks import parse_stack_info
+from emalign.scripts.align_stack_xy import align_stack_xy
 
 
 logging.basicConfig(level=logging.INFO)
@@ -32,6 +30,16 @@ logging.getLogger('jax._src.xla_bridge').setLevel(logging.WARNING)
 
 def align_dataset_xy(config_path,
                      num_workers):
+    '''Align and stitch in XY consecutive image stacks defined by a configuration file.
+
+    Image stacks will be aligned one by one based on paths and parameters defined in a configuration file.
+    Stacks will be skipped if they already exist.
+
+    Args:
+        config_path (str): Absolute path to a JSON file containing the configuration.
+            See documentation for how to format the configuration file (work in progress).
+        num_workers (int): Number of threads to use for multiprocessing when relevant.
+    '''
     
     with open(config_path, 'r') as f:
         main_config = json.load(f)
@@ -42,7 +50,6 @@ def align_dataset_xy(config_path,
     offset          = main_config['offset']
     scale           = main_config['scale']
     stride          = main_config['stride']
-    overlap         = main_config['overlap']
     apply_gaussian  = main_config['apply_gaussian']
     apply_clahe     = main_config['apply_clahe']
     stack_configs   = main_config['stack_configs']
@@ -55,7 +62,6 @@ def align_dataset_xy(config_path,
     logging.info(f'Destination:\n   {output_path}')
     logging.info(f' - Resolution: {resolution}')
     logging.info(f' - Compute scale: {scale}')
-    logging.info(f' - Tile overlap (px): {overlap}')
     logging.info(f' - Apply gaussian: {apply_gaussian}')
     logging.info(f' - Apply CLAHE: {apply_clahe}\n')
     logging.info(f'Aligning {len(stack_configs)} tilesets, including {main_config['tilesets_combined']} combined.')
@@ -68,17 +74,17 @@ def align_dataset_xy(config_path,
                                                 desc='Processing stacks', 
                                                 leave=True):
         tile_maps_paths, tile_maps_invert = parse_stack_info(stack_config_path)
-        align_stack_xy(output_path,
-                       stack_name,
-                       tile_maps_paths,
-                       tile_maps_invert,
-                       resolution,
-                       offset,
-                       stride,
-                       overlap,
-                       apply_gaussian,
-                       apply_clahe,
-                       num_workers)
+        align_stack_xy(output_path=output_path,
+                       stack_name=stack_name,
+                       tile_maps_paths=tile_maps_paths,
+                       tile_maps_invert=tile_maps_invert,
+                       resolution=resolution,
+                       offset=offset,
+                       stride=stride,
+                       apply_gaussian=apply_gaussian,
+                       apply_clahe=apply_clahe,
+                       num_cores=num_workers,
+                       overwrite=False)
     logging.info('Done!')
     logging.info(f'Output: {output_path}')        
     
