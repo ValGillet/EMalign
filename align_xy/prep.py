@@ -10,9 +10,9 @@ from glob import glob
 from tqdm import tqdm
 
 from emprocess.utils.io import load_tif
-from ..array.sift import estimate_transform_sift
-from ..array.stacks import Stack
-from ..visualize.neuroglancer import add_layers, start_nglancer_viewer
+from ..arrays.sift import estimate_transform_sift
+from ..arrays.stacks import Stack
+from ..visualize.nglancer import add_layers, start_nglancer_viewer
 from ..align_z.utils import get_ordered_datasets
 
 
@@ -103,10 +103,21 @@ def get_stacks(stack_paths, invert_instructions):
     return new_stacks
 
 
-def check_stacks_to_invert(stack_list, num_workers, **kwargs):
+def check_stacks_to_invert(stack_list, 
+                           num_workers=1, 
+                           **kwargs):
 
-    '''
-    Display one image per stack in neuroglancer viewer and prompt user to determine whether a stack needs to be inverted. 
+    '''Check what stacks must be inverted
+
+    Display the first image of each stack in neuroglancer viewer, and prompt user to determine whether a stack needs to be inverted. 
+
+    Args:
+        stack_list (`list` of `emalign.align.xy.stacks.Stack`): List of stacks to visualize.
+        num_workers (int, optional): Number of threads used to open images. Defaults to 1.
+        **kwargs: Arguments passed to `start_nglancer_viewer`.
+
+    Returns:
+        to_invert (dict): Dictionary from stack_names to decision to invert: either True or False.
     '''
 
     viewer = start_nglancer_viewer(**kwargs)
@@ -142,6 +153,16 @@ def check_stacks_to_invert(stack_list, num_workers, **kwargs):
 
 # FUSE STACKS
 def find_overlapping_stacks(dataset_paths):
+    '''Find potentially overlapping stacks from a list of store paths. 
+
+    Stacks are determined to be potentially overlapping if their z offsets match.
+    
+    Args:
+        dataset_paths (`list` of `str`): List of absolute paths to zarr stores containing the image data.
+
+    Returns:
+        overlapping_stacks (`list` of `list`): List of lists containing groups of overlapping stacks.
+    '''
 
     datasets, z_offsets = get_ordered_datasets(dataset_paths)
     datasets = datasets[::-1]
@@ -165,7 +186,26 @@ def find_overlapping_stacks(dataset_paths):
     return overlapping_stacks
 
 
-def create_configs_fused_stacks(overlapping_stacks, scale=0.1):
+def create_configs_fused_stacks(overlapping_stacks, 
+                                scale=0.1):
+    
+    '''Create configurations for overlapping stacks.
+
+    For stacks existing on the same Z levels, that were stitched "on grid" or images that could not, determine whether they do overlap and their transformations.
+
+    Args:
+        overlapping_stacks (list): List of stacks with the same Z offset, potentially overlapping on the XY plane.
+        scale (`float`, optional): Scale to use to downsample images when determining offset with SIFT. Defaults to 0.1. 
+
+    Returns:
+        fuse_configs (`list` of `dict`): List of dictionaries of configuration of the stacks.\n
+            Keys: Names of the stack found to be overlapping.\n
+            path: Absolute path to the store containing the image data of this stack\n
+            z_offset: Offset in pixel along the z axis.\n
+            xy_offset: Offset (xy) in pixel to apply to the stack for images to be roughly aligned.\n
+            rotation: Rotation (degrees) to be applied to the stack for images to be roughly aligned. 
+    '''
+
     first_slices = {}
     overlap_G = nx.DiGraph()
 
@@ -185,7 +225,7 @@ def create_configs_fused_stacks(overlapping_stacks, scale=0.1):
     for stack1, stack2 in tqdm(list(combinations(first_slices.keys(), 2))):
         img1 = first_slices[stack1][1]
         img2 = first_slices[stack2][1]
-        offset, angle, valid_estimate = estimate_transform_sift(img1, img2, 0.1)
+        offset, angle, valid_estimate = estimate_transform_sift(img1, img2, scale)
 
         if valid_estimate:
             overlap_G.add_edge(stack1, stack2, offset=-offset, angle=-angle)

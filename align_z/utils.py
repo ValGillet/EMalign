@@ -10,7 +10,7 @@ from emprocess.utils.io import get_dataset_attributes
 from emprocess.utils.transform import rotate_image
 
 from ..io.store import get_data_samples
-from ..array.sift import estimate_transform_sift
+from ..arrays.sift import estimate_transform_sift
 
 
 def get_ordered_datasets(dataset_paths):

@@ -7,16 +7,15 @@ import numpy as np
 import jax.numpy as jnp
 
 from connectomics.common import bounding_box
-from scipy.ndimage import binary_erosion
 from sofima import flow_field, flow_utils, mesh
 from sofima.warp import ndimage_warp
 
 from emprocess.utils.mask import compute_greyscale_mask, mask_to_bbox
 from emprocess.utils.transform import rotate_image
 
-from ..array.sift import estimate_transform_sift
-from ..array.utils import homogenize_arrays_shape, xy_offset_to_pad, _compute_laplacian_var
-from ..array.overlap import get_overlap
+from ..arrays.sift import estimate_transform_sift
+from ..arrays.utils import homogenize_arrays_shape, xy_offset_to_pad, _compute_laplacian_var
+from ..arrays.overlap import get_overlap
 from .utils import mask_to_mesh
 
 

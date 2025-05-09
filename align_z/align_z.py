@@ -11,7 +11,7 @@ from sofima import flow_field, flow_utils, map_utils, mesh, warp
 from tqdm import tqdm
 
 from ..io.store import get_data_slice
-from ..array.pad import pad_to_shape
+from ..arrays.utils import pad_to_shape
 
 
 # TODO: remove need for computing masks if they exist.

@@ -4,8 +4,8 @@ import cv2
 import numpy as np
 import warnings
 
-from ..array.utils import compute_laplacian_var_diff
-from ..array.overlap import get_overlap
+from ..arrays.utils import compute_laplacian_var_diff
+from ..arrays.overlap import get_overlap
 
 
 def mask_to_mesh(mask, stride):
