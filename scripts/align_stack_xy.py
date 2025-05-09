@@ -21,10 +21,14 @@ import sys
 from pymongo import MongoClient
 from tqdm import tqdm
 
-from emalign.utils.align_xy import get_coarse_offset, get_elastic_mesh
-from emalign.utils.stacks import Stack, parse_stack_info
-from emalign.utils.io import check_progress, render_slice_xy, set_dataset_attributes
-from emalign.utils.tile_map import get_tile_map_margins
+from emprocess.utils.io import set_dataset_attributes
+
+from emalign.align_xy.render import render_slice_xy
+from emalign.align_xy.stitch_ongrid import get_coarse_offset, get_elastic_mesh
+from emalign.arrays.stacks import Stack, parse_stack_info
+from emalign.arrays.tile_map import get_tile_map_margins
+from emalign.io.mongo import check_progress
+
 
 logging.basicConfig(level=logging.INFO)
 logging.getLogger('absl').setLevel(logging.WARNING)
@@ -40,58 +44,28 @@ def align_stack_xy(output_path,
                    stride,
                    apply_gaussian,
                    apply_clahe,
-                   num_cores,
+                   num_cores=1,
                    overwrite=False):
     
-    '''
-    Align and stitch image stack in XY. 
+    '''Align and stitch image stack in XY. 
 
     Args:
-
-        output_path (``str``):
-
-            Path to the zarr container where the stack will be written.
-
-        stack_name (``str``):
-
-            Name of the stack. Will be used as the dataset name in the destination zarr container. 
-
-        tile_maps_paths (``dict``):
-
-            Dictionnary of slices to dictionnary of tile grid positions to paths of tifs.
-
-        tile_maps_invert (``dict``):
-
-            Dictionnary of tile grid positions to boolean, describing whether tiles need to be inverted at that position. 
-
-        resolution (list of ``int``):
-
-            List of 2 int corresponding to the YX resolution in nanometers.
-
-        offset (list of ``int``):
-
-            List of 3 int corresponding to the ZYX offset of the stack in voxels.
-
-        stride (``int``):
-
-            YX stride for computing the elastic mesh, in pixels. 
-
-        prelim_overlap (``int``):
-
-            Likely overlap between tiles. Overlap will be finely determined within a window given by this value.
-
-        apply_gaussian (``bool``):
-
-            Whether to apply a gaussian filter to tiles for denoising.
-
-        apply_clahe (``bool``):
-
-            Whether to apply CLAHE to tiles to enhance contrast.
-
-        num_cores (``int``):
-
-            Number of CPUs to use for rendering stitched images.
+        output_path (str): Path to the zarr container where the stack will be written.
+        stack_name (str): Name of the stack. Will be used as the dataset name in the destination zarr container. 
+        tile_maps_paths (dict): Dictionnary of slices to dictionnary of tile grid positions to paths of tifs.
+        tile_maps_invert (dict): Dictionnary of tile grid positions to boolean, describing whether tiles need to be inverted at that position. 
+        resolution (`list` of `int`): List of 2 int corresponding to the YX resolution in nanometers.
+        offset (`list` of `int`): List of 3 int corresponding to the ZYX offset of the stack in voxels.
+        stride (int): YX stride for computing the elastic mesh, in pixels. 
+        prelim_overlap (int): Likely overlap between tiles. Overlap will be finely determined within a window given by this value.
+        apply_gaussian (bool): Whether to apply a gaussian filter to tiles for denoising.
+        apply_clahe (bool): Whether to apply CLAHE to tiles to enhance contrast.
+        num_cores (int): Number of CPUs to use for rendering stitched images. Defaults to 1.
+        overwrite (bool): Whether to overwrite dataset. If True, will delete existing dataset and start over. If False, will check for progress and skip processed slices. Defaults to False.
     '''
+
+    if overwrite:
+        logging.warning('Existing dataset will be deleted and aligned from scratch.')
 
     db_host=None
     project = os.path.basename(output_path).rstrip('.zarr')
@@ -116,7 +90,7 @@ def align_stack_xy(output_path,
     offset[0] = z_offset
 
     # Skip if already fully processed
-    if os.path.exists(attrs_path):
+    if os.path.exists(attrs_path) and not overwrite:
        logging.info(f'Skipping {stack.stack_name} because it was already processed.')
        return False
     
@@ -234,7 +208,7 @@ def align_stack_xy(output_path,
         else:
             # There is only one tile, no need to compute anything
             pbar.set_description(f'{stack.stack_name}: Writing unique tile...')
-            stitch_score = render_slice_xy(dataset, z-z_offset, tile_map, None, None, None, parallelism=parallelism, dest_mask=dataset_mask)
+            stitch_score = render_slice_xy(dataset, z-z_offset, tile_map, None, None, None, parallelism=1, dest_mask=dataset_mask)
 
         if np.any(stitch_score == 0) or np.isnan(stitch_score).any():
             logging.warning(f'{stack.stack_name}: stitch score too low, tiles may not overlap if margin is too large (z = {z})')
@@ -252,7 +226,7 @@ def align_stack_xy(output_path,
             'overlap': overlap,
             'margin': margin,
             'stitch_score': float(np.median(stitch_score)),
-            'missing_tile': tm.missing_tile
+            'missing_tile': tm.missing_tiles
               }
         collection_progress.insert_one(doc)
 
@@ -260,10 +234,12 @@ def align_stack_xy(output_path,
 
     # Attributes are ZYX coordinates
     # Resolution in Z is hard coded to be 50 nm currently
+    # Voxel_size and resolution are both set for compatibility with different versions of funlib/daisy/gunpowder
     # Keys are used in subsequent steps in the alignment and segmentation pipeline
     attributes = {'voxel_offset': offset,
                   'offset': list(map(int, np.array(offset)*np.array([50, *resolution]))),
-                  'resolution': list(map(int, (50, *resolution)))}
+                  'resolution': list(map(int, (50, *resolution))),
+                  'voxel_size': list(map(int, (50, *resolution)))}
 
     set_dataset_attributes(dataset, attributes)
 
@@ -298,7 +274,7 @@ if __name__ == '__main__':
                    resolution=resolution,
                    offset=offset,
                    stride=stride,
-                   prelim_overlap=prelim_overlap,
                    apply_gaussian=apply_gaussian,
                    apply_clahe=apply_clahe,
-                   num_cores=num_cores)
+                   num_cores=num_cores,
+                   overwrite=False)
