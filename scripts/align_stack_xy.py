@@ -204,30 +204,38 @@ def align_stack_xy(output_path,
             pbar.set_description(f'{stack.stack_name}: Rendering...')
             parallelism = min(num_cores, len(tile_map))
             stitch_score = render_slice_xy(dataset, z-z_offset, tile_map, meshes, render_stride, tm.tile_masks, 
-                                           parallelism=parallelism, margin_overrides=margin_map, dest_mask=dataset_mask)
+                                           parallelism=parallelism, margin_overrides=margin_map, dest_mask=dataset_mask, resize_canvas=True)
+            doc = {
+                'stack_name': stack.stack_name,
+                'z': z,
+                'mesh_parameters':{
+                                'stride':render_stride,
+                                'patch_size':patch_size,
+                                'k0':k0,
+                                'k':k,
+                                'gamma':gamma
+                                    },
+                'overlap': overlap,
+                'margin': margin,
+                'stitch_score': float(np.median(stitch_score)),
+                'tile_space': list(map(int, tm.tile_space)),
+                'missing_tile': tm.missing_tiles
+                    }
         else:
             # There is only one tile, no need to compute anything
             pbar.set_description(f'{stack.stack_name}: Writing unique tile...')
-            stitch_score = render_slice_xy(dataset, z-z_offset, tile_map, None, None, None, parallelism=1, dest_mask=dataset_mask)
+            stitch_score = render_slice_xy(dataset, z-z_offset, tile_map, None, None, None, parallelism=1, dest_mask=dataset_mask, resize_canvas=True)
+            doc = {
+                'stack_name': stack.stack_name,
+                'z': z,
+                'tile_space': list(map(int, tm.tile_space)),
+                'missing_tile': tm.missing_tiles
+                }
 
         if np.any(stitch_score == 0) or np.isnan(stitch_score).any():
             logging.warning(f'{stack.stack_name}: stitch score too low, tiles may not overlap if margin is too large (z = {z})')
 
-        doc = {
-            'stack_name': stack.stack_name,
-            'z': z,
-            'mesh_parameters':{
-                            'stride':render_stride,
-                            'patch_size':patch_size,
-                            'k0':k0,
-                            'k':k,
-                            'gamma':gamma
-                              },
-            'overlap': overlap,
-            'margin': margin,
-            'stitch_score': float(np.median(stitch_score)),
-            'missing_tile': tm.missing_tiles
-              }
+
         collection_progress.insert_one(doc)
 
     pbar.set_description(f'{stack.stack_name}: done')
