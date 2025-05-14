@@ -156,8 +156,7 @@ def check_stacks_to_invert(stack_list,
                         names=[stack_name],
                         clear_viewer=True)
             
-            answer = input(f'{str(i).zfill(2)}/{len(fs)} - Invert {stack_name}? (y/n) ').strip(' ')
-
+            answer = input(f'{str(i+1).zfill(2)}/{len(fs)} - Invert {stack_name}? (y/n) ').strip(' ')
             while answer not in ['y', 'n', '']:
                 answer = input(f'{str(i).zfill(2)}/{len(fs)} - Please provide a valid answer for {stack_name}: (y/n) ')
 
