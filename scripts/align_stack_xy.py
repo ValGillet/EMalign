@@ -250,6 +250,7 @@ def align_stack_xy(output_path,
                   'voxel_size': list(map(int, (50, *resolution)))}
 
     set_dataset_attributes(dataset, attributes)
+    set_dataset_attributes(dataset_mask, attributes)
 
     return True
 
