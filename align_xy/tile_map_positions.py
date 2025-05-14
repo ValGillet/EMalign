@@ -1,15 +1,15 @@
 from collections import defaultdict
 import networkx as nx
 import numpy as np
-import cv2
 import logging
 from tqdm import tqdm
 from itertools import combinations
 
-from emalign.utils.io import load_tilemap
-from emalign.utils.stacks import Stack
-from emalign.utils.offsets import estimate_transform_sift, xy_offset_to_pad
-from emalign.utils.arrays import pad_to_shape
+from emalign.arrays.overlap import check_overlap
+from emalign.arrays.sift import estimate_transform_sift
+from emalign.arrays.stacks import Stack
+from emalign.io.tif import load_tilemap
+
 
 logging.basicConfig(level=logging.INFO)
 
