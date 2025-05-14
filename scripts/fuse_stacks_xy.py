@@ -1,3 +1,4 @@
+import argparse
 import json
 import logging
 import os
@@ -9,11 +10,10 @@ import tensorstore as ts
 
 from glob import glob
 from tqdm import tqdm
+from emprocess.utils.io import get_dataset_attributes, set_dataset_attributes
 
 from emalign.align_xy.prep import create_configs_fused_stacks, find_overlapping_stacks
 from emalign.arrays.utils import _compute_laplacian_var, _compute_sobel_mean, _compute_grad_mag
-
-from EMprocess.emprocess.utils.io import get_dataset_attributes, set_dataset_attributes
 
 
 def get_fused_configs(
@@ -52,7 +52,7 @@ def get_fused_configs(
     pbar = tqdm(overlapping_groups, position=0)
     for i, group in enumerate(pbar):
         idx = '_'.join([group[0].kvstore.path.split('/')[-2].split('_')[0], str(i).zfill(2)])
-        filepath = os.path.join(os.path.dirname(config_path), f'FUSE_XY_{idx}.json')
+        filepath = os.path.join(os.path.dirname(config_path), f'fuse_xy_{idx}.json')
 
         if not os.path.exists(filepath):
             pbar.set_description(f'Group {idx}: Determining overlap...')
@@ -61,7 +61,7 @@ def get_fused_configs(
                 json.dump(fused_config, f, indent='')
         else:
             with open(filepath, 'r') as f:
-                fused_config = json.open(f)
+                fused_config = json.load(f)
         fused_configs[idx] = fused_config
         
     return fused_configs
@@ -96,7 +96,7 @@ def fuse_stacks_group(config,
 
     if img_on_top == 'auto' and img_q_fun is None:
         raise ValueError('img_on_top set to auto. Please provide img_q_fun.')
-
+    
     # Open datasets
     datasets = {}
     dataset_masks = {}
@@ -113,14 +113,19 @@ def fuse_stacks_group(config,
                                     'path': attrs['path'] + '_mask',
                                             }},
                                 read=True).result()
+        destination_name.append(stack.split('_', maxsplit=1)[-1])
     z_max = list(datasets.values())[0].domain[0].exclusive_max
+    destination_name = '_'.join(destination_name)
 
     # Create destination
-    destination_path = ''
-    destination_mask_path = ''
     if overwrite:
         logging.warning('Existing dataset will be deleted and aligned from scratch.')
 
+    # Prepare destination
+    destination_name = [list(config.values())[0].split('_')[0]]
+    destination_basepath = os.path.dirname(list(config.values())[0])
+    destination_path = os.path.join(destination_basepath, destination_name)
+    destination_mask_path = os.path.join(destination_basepath, destination_name + '_mask')
     if overwrite or not os.path.exists(destination_path):
         destination = ts.open({'driver': 'zarr',
                             'kvstore': {
@@ -212,7 +217,7 @@ def fuse_stacks_group(config,
             if pbar_slice.n == pbar_slice.total-1:
                 pbar_slice.set_description('Writing slice...')
                 write_slice(destination, canvas, z)
-                write_slice(destination_mask, canvas, z)
+                write_slice(destination_mask, canvas_mask, z)
 
         # Log progress
         doc = {
@@ -284,3 +289,24 @@ def align_fused_stacks_xy(config_path,
                             overwrite=overwrite,
                             num_workers=num_workers)
             pbar.update()
+
+if __name__ == '__main__':
+
+
+    parser=argparse.ArgumentParser('Script aligning tiles in XY based on SOFIMA (Scalable Optical Flow-based Image Montaging and Alignment). \n\
+                                    This script was written to match the file structure produced by the ThermoFisher MAPs software.')
+    parser.add_argument('-cfg', '--config',
+                        metavar='CONFIG_PATH',
+                        dest='config_path',
+                        required=True,
+                        type=str,
+                        help='Path to the main task config.')
+    parser.add_argument('-c', '--cores',
+                        metavar='CORES',
+                        dest='num_workers',
+                        required=True,
+                        type=str,
+                        help='Number of threads to use for rendering. Default: 1')
+    args=parser.parse_args()
+
+    align_fused_stacks_xy(**vars(args))
