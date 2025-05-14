@@ -1,13 +1,16 @@
 import argparse
 import json
 import logging
+import numpy as np
+import os
+import sys
 
 from glob import glob
 from time import sleep
+from tqdm import tqdm
 
-from emalign.utils.inspect import *
-from emalign.utils.align_z import compute_datasets_offsets, align_arrays_z
-from emalign.utils.io import get_ordered_datasets
+from emalign.align_z.align_z import align_arrays_z
+from emalign.align_z.utils import compute_datasets_offsets, get_ordered_datasets
 
 
 logging.basicConfig(level=logging.INFO)
