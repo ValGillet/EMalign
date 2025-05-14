@@ -4,13 +4,24 @@ import numpy as np
 from emprocess.utils.img_proc import downsample
 
 
-def estimate_transform_sift(img1, img2, scale=1, refine_estimate=True):
+def estimate_transform_sift(img1, 
+                            img2, 
+                            scale=1.0, 
+                            refine_estimate=True):
+    '''Estimate transformation (xy offset and rotation) from img2 to img1 using SIFT.
 
-    '''
-    Estimate transformation (xy offset and rotation) from img2 to img1
-    Returns offset in pixels, rotation before transform, whether estimate is robust based on number and proportion of matches used
-    '''
+    Args:
+        img1 (np.ndarray): Reference greyscale image.
+        img2 (np.ndarray): Moving greyscale image.
+        scale (float, optional): Scale to downsample images to for computing the offset. Defaults to 1.
+        refine_estimate (bool, optional): Whether to try again with higher resolution if the first estimate is found to be invalid. Defaults to True.
 
+    Returns:
+        tuple of: 
+            xy_offset (np.ndarray): [x,y] offset to apply to img2, in pixel.
+            theta (float): angle to rotate img2 by, in degrees.
+            robust_estimate (bool): Whether the estimate was valid based on the number and proportion of good matches.
+    '''
     # knnMatch will return an error if there are too many keypoints so we limit their number
     max_features=250000
 
