@@ -85,8 +85,7 @@ def align_dataset_xy(config_path,
                        apply_clahe=apply_clahe,
                        num_cores=num_workers,
                        overwrite=False)
-    logging.info('Done!')
-    logging.info(f'Output: {output_path}')        
+    logging.info(f'Done! Output can be found at: {output_path}')
     
 
 if __name__ == '__main__':
@@ -105,7 +104,7 @@ if __name__ == '__main__':
                         dest='num_workers',
                         type=int,
                         default=1,
-                        help='Number of threads to use for processing. Default: 0 (all cores available)')
+                        help='Number of threads to use for processing. Default: 1')
     args=parser.parse_args()
 
 
