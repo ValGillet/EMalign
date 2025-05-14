@@ -15,9 +15,9 @@ import numpy as np
 import pandas as pd
 import sys
 
-from .align_xy.tile_map_positions import estimate_tile_map_positions
-from .align_xy.prep import find_offset_from_main_config, get_stacks, check_stacks_to_invert
-from .io.volumescope import get_tilesets
+from emalign.align_xy.tile_map_positions import estimate_tile_map_positions
+from emalign.align_xy.prep import find_offset_from_main_config, get_stacks, check_stacks_to_invert
+from emalign.io.volumescope import get_tilesets
 
 logging.basicConfig(level=logging.INFO)
 logging.getLogger('absl').setLevel(logging.WARNING)
@@ -64,7 +64,7 @@ def prep_align_stacks(main_dir,
 
     # Invert stack?
     logging.info('Please check whether to invert stacks')
-    invert_instructions = check_stacks_to_invert(stack_paths, resolution, num_workers, port=port)
+    invert_instructions = check_stacks_to_invert(stack_paths, num_workers, bind_port=port)
 
     stacks = get_stacks(stack_paths, invert_instructions)
 
@@ -79,12 +79,7 @@ def prep_align_stacks(main_dir,
         # Overlapping stacks were found, figure out overlapping regions
         for combined_stack in combined_stacks.values():
             # Detect overlapping regions
-            processed_combined_stacks += estimate_tile_map_positions(combined_stack, 
-                                                                     apply_gaussian, 
-                                                                     apply_clahe, 
-                                                                     scale=[0.3, 0.5], 
-                                                                     overlap_score_threshold=0.8,
-                                                                     rotation_threshold=5)
+            processed_combined_stacks += combined_stack
 
     logging.info('Writing stack configs')
     config_paths = {}
