@@ -283,8 +283,8 @@ def create_configs_fused_stacks(overlapping_stacks,
 
         fuse_configs.append({
                     n: {'path': G.nodes[n]['path'],
-                        'z_offset': G.nodes[n]['z'],
-                        'xy_offset': -abs_positions[n],
-                        'rotation': abs_rotations[n]} 
+                        'z_offset': int(G.nodes[n]['z']),
+                        'xy_offset': list(map(int, -abs_positions[n])),
+                        'rotation': float(abs_rotations[n])} 
                         for n in G.nodes})
     return fuse_configs
