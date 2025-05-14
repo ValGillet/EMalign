@@ -151,6 +151,5 @@ class TileMap:
             self.overlap = estimate_tilemap_overlap(self.tile_map, self.tile_space, scale=scale)
             return self.overlap
         else:
-            print('No overlap can be computed, only one image in tile_map.')
             self.overlap = None
             return None
