@@ -2,6 +2,8 @@ import numpy as np
 
 from sofima import warp
 
+from emprocess.utils.mask import mask_to_bbox
+
 from .utils import check_stitch
 from ..io.store import write_slice
 
@@ -16,6 +18,7 @@ def render_slice_xy(destination,
                     margin=50,
                     dest_mask=None,
                     return_render=False,
+                    resize_canvas=True,
                     **kwargs):
     '''Render an aligned image from a tile map.
 
@@ -34,12 +37,13 @@ def render_slice_xy(destination,
         margin (int, optional): Number of pixels cropped from each tile's boundaries to remove artifacts from deformation. Defaults to 50.
         dest_mask (_type_, optional): Zarr store where to write aligned slice's mask. Defaults to None.
         return_render (bool, optional): Whether to return the aligned image rather than writing it. Defaults to False.
+        resize_canvas (bool, optional): Whether the image to the size of a bounding box defined by the mask. Defaults to True.
         **kwargs (optional): Additional arguments passed to warp.render_tiles. 
             e.g.: margin_overrides provides specific margins per direction per tile.
 
     Returns:
         int: 
-            If return_render == False: stitch score describing how well overlaps match, between 0 and 1 as defined by check_stitch. 
+            If return_render == False (Default): stitch score describing how well overlaps match, between 0 and 1 as defined by check_stitch. 
             If return_render == True: tuple of: aligned image, stitch score.
     '''
 
@@ -56,9 +60,14 @@ def render_slice_xy(destination,
         stitch_score = check_stitch(warped_tiles, margin)
     else:
         stitched = list(tile_map.values())[0]
-        mask = np.ones_like(list(tile_masks.values())[0]).astype(bool)
+        mask = np.ones_like(list(tile_map.values())[0]).astype(bool)
         stitch_score = 1
     
+    if resize_canvas:
+        y1,y2,x1,x2 = mask_to_bbox(mask)
+        stitched = stitched[y1:y2,x1:x2]
+        mask = mask[y1:y2,x1:x2]
+
     if return_render:
         return stitched, stitch_score
     else:
