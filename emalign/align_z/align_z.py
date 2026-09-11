@@ -18,8 +18,11 @@ from ..arrays.utils import resample, homogenize_arrays_shape, pad_to_shape
 from ..arrays.sift import estimate_transform_sift
 from ..arrays.overlap import get_overlap_ref
 
+from .warp_hotfix import warp_affine_tiled
+
 
 PAD_OVERLAP = 1000
+SHRT_MAX = 32767
 
 
 def _get_flow_stores(dataset_path, dataset_name, destination_path,
@@ -377,8 +380,12 @@ def _compute_flow(dataset,
         transform[z] = t
 
         # Warp data
-        mov = cv2.warpAffine(mov, M, output_shape[::-1])
-        mov_mask = cv2.warpAffine(mov_mask.astype(np.uint8), M, output_shape[::-1]).astype(bool)
+        if np.any(np.array(mov.shape) > SHRT_MAX):
+            mov = warp_affine_tiled(mov, M, output_shape[::-1])
+            mov_mask = warp_affine_tiled(mov_mask.astype(np.uint8), M, output_shape[::-1]).astype(bool)
+        else:
+            mov = cv2.warpAffine(mov, M, output_shape[::-1])
+            mov_mask = cv2.warpAffine(mov_mask.astype(np.uint8), M, output_shape[::-1]).astype(bool)
 
         # Compute flow
         flow = _compute_flow_slice(overlap_ref, overlap_ref_mask, 
