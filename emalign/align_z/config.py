@@ -237,3 +237,53 @@ def load_dataset_configs(config_dir):
         raise ValueError(f'Invalid dataset configs: {"; ".join(all_errors)}')
 
     return configs
+
+
+#---------- Fusing of XY aligned stacks ----------#
+# The configuration files are written by scripts/fuse_stacks_xy.py. They are read here because
+# Z alignment is what consumes the fused stacks, and must know whether the fusing step was run.
+
+def get_fuse_config_dir(project_dir):
+    '''Path to the directory holding the fuse configuration files of a project.
+
+    Args:
+        project_dir: Directory containing the project: config directory, and output zarr
+
+    Returns:
+        str: Path to project_dir/config/fuse_config
+    '''
+    return os.path.join(project_dir, 'config', 'fuse_config')
+
+
+def load_fuse_plan(project_dir):
+    '''Load the fuse plan and the configuration of every group of stacks to fuse.
+
+    Fusing is optional: a project where no stacks overlap has no fuse configuration at all.
+
+    Args:
+        project_dir: Directory containing the project: config directory, and output zarr
+
+    Returns:
+        tuple: (plan, group_configs) where both are None if no fuse plan exists.
+
+    Raises:
+        FileNotFoundError: If the plan exists but references a missing group config
+    '''
+    config_dir = get_fuse_config_dir(project_dir)
+    plan_path = os.path.join(config_dir, '00_fuse_plan.json')
+
+    if not os.path.exists(plan_path):
+        return None, None
+
+    with open(plan_path, 'r') as f:
+        plan = json.load(f)
+
+    group_configs = []
+    for filename in plan.get('group_configs', []):
+        config_path = os.path.join(config_dir, filename)
+        if not os.path.exists(config_path):
+            raise FileNotFoundError(f'Fuse plan references a missing config file: {config_path}')
+        with open(config_path, 'r') as f:
+            group_configs.append(json.load(f))
+
+    return plan, group_configs
