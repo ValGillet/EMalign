@@ -6,7 +6,7 @@ from emalign.io.process.transform import rotate_image
 from emalign.io.process.mask import mask_to_bbox
 
 from ..io.process.mask import compute_greyscale_mask  
-from .sift import estimate_transform_sift
+from .sift import SIFT_SCALES, estimate_transform_sift
 from .utils import compute_laplacian_var_diff, homogenize_arrays_shape, resample, transform_bbox, xy_offset_to_pad
 
 
@@ -250,11 +250,24 @@ def get_overlap_ref(ref_img,
                     pad_overlap=100,
                     return_sift=False):
 
+    M = output_shape = ref_offset = stats = None
+    valid_estimate = False
+
     if bbox_ref is None:
-        # Estimate transform between ref and mov to figure out where the overlap is
-        M, output_shape, ref_offset, valid_estimate, stats = estimate_transform_sift(ref_img, mov_img, 0.1, refine_estimate=True)
-        if not valid_estimate:
-            M, output_shape, ref_offset, valid_estimate, stats = estimate_transform_sift(ref_img, mov_img, 0.3, refine_estimate=True)
+        # Estimate transform between ref and mov to figure out where the overlap is.
+        for sift_scale in SIFT_SCALES:
+            M, output_shape, ref_offset, valid_estimate, stats = estimate_transform_sift(
+                ref_img, mov_img, sift_scale,
+                ref_mask=ref_mask, mov_mask=mov_mask, refine_estimate=True)
+            if valid_estimate:
+                break
+
+        if M is None:
+            # Nothing could be estimated. Return without a bbox so that the caller can
+            # report it, rather than crashing below in transform_bbox with M=None.
+            if return_sift:
+                return None, None, None, (M, output_shape, ref_offset, valid_estimate, stats)
+            return None, None, None
 
         # Get the overlapping region in the reference image
         if mov_mask is None:
@@ -262,7 +275,7 @@ def get_overlap_ref(ref_img,
 
         bbox_mask = np.array(mask_to_bbox(mov_mask))
         bbox_ref = transform_bbox(bbox_mask, M, ref_offset, dilate=pad_overlap)
-    
+
     overlap_ref, overlap_ref_mask = get_overlap_z(ref_img, bbox_ref, ref_mask, compute_mask=True)
 
     if return_sift:
