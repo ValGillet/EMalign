@@ -4,6 +4,9 @@ import numpy as np
 from emalign.arrays.utils import resample
 
 
+SIFT_SCALES = (0.1, 0.3)  # Internal SIFT downsample scales to try, in order
+
+
 def adjust_matrix_to_shape(mov_img, M):
 
     y, x = mov_img.shape[:2]
@@ -64,7 +67,8 @@ def calculate_sift_robustness_index(good_matches, inliers, M, src_pts, dst_pts,
         return 0.0, {'reason': 'No inliers found'}
     
     # Calculate residuals for inlier matches
-    inlier_mask = inliers.flatten() if inliers is not None else np.ones(n_matches, dtype=bool)
+    # cv2.estimateAffinePartial2D returns inliers as uint8, so it must be cast to bool.
+    inlier_mask = inliers.flatten().astype(bool) if inliers is not None else np.ones(n_matches, dtype=bool)
     
     # Transform source points using estimated matrix
     src_2d = src_pts.reshape(-1, 2)
@@ -76,8 +80,10 @@ def calculate_sift_robustness_index(good_matches, inliers, M, src_pts, dst_pts,
     all_residuals = np.linalg.norm(transformed_src - dst_2d, axis=1)
     
     # Trim 25% worse residuals so that they don't bias mean and std
+    # Keep at least one residual, otherwise the mean and the consistency ratio are nan
+    # and the estimate is silently rejected
     inlier_residuals = np.sort(all_residuals[inlier_mask])
-    cutoff = int(len(inlier_residuals) * 0.75)
+    cutoff = max(1, int(len(inlier_residuals) * 0.75))
     inlier_residuals = inlier_residuals[:cutoff]
     
     # Component 1: Match quantity score (0-1)
@@ -251,7 +257,7 @@ def estimate_transform_sift(ref_img,
     else:
         M = None
                
-    if M is None or np.isnan(M).all():
+    if M is None or np.isnan(M).any():
         output_shape = None
         ref_offset = None
         robust_estimate = False
@@ -270,7 +276,11 @@ def estimate_transform_sift(ref_img,
             M, output_shape, ref_offset = adjust_matrix_to_shape(mov_img, M)
         
     if refine_estimate and not robust_estimate and scale<0.9:
-        return estimate_transform_sift(ref_img, mov_img, scale=scale+0.1, refine_estimate=False)
+        return estimate_transform_sift(ref_img, mov_img, scale=scale+0.1,
+                                       ref_mask=ref_mask, mov_mask=mov_mask,
+                                       refine_estimate=False,
+                                       return_upscaled_matrix=return_upscaled_matrix,
+                                       return_raw_homology=return_raw_homology)
     else:
         if ref_offset is not None:
             ref_offset = ref_offset.astype(int)
