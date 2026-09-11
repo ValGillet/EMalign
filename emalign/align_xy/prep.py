@@ -15,7 +15,7 @@ from ..arrays.sift import estimate_transform_sift
 from ..arrays.stacks import Stack
 from ..arrays.utils import resample
 from ..visualize.nglancer import add_layers, start_nglancer_viewer
-from ..align_z.utils import get_ordered_datasets
+from ..align_z.utils import get_ordered_datasets, _datasets_without_masks, _occupancy_table
 
 
 
@@ -211,6 +211,18 @@ def check_stacks_to_invert(stack_list,
 
 
 # FUSE STACKS
+def _dataset_name(dataset):
+    '''Name of a dataset, from the path of its store.
+
+    Args:
+        dataset (tensorstore.TensorStore): Dataset to name.
+
+    Returns:
+        str: Name of the dataset.
+    '''
+    return os.path.basename(os.path.abspath(dataset.kvstore.path))
+
+
 def create_configs_fused_stacks(main_config_path,
                                 scale = 0.1
                                 ):
@@ -221,17 +233,12 @@ def create_configs_fused_stacks(main_config_path,
 
     # Find datasets
     datasets, z_offsets = get_ordered_datasets([main_config_path], exclude=['flow', 'mask', '10x'])
-    z_ranges = [np.arange(z[0], z[0] + ds.shape[0]) for z, ds in zip(z_offsets, datasets)]
+    datasets, names = _datasets_without_masks(datasets)
 
-    # Find all ranges over which there is overlap
-    unique_slices = sorted(np.unique(np.concatenate(z_ranges)).tolist())
-    df = pd.DataFrame({'z': unique_slices, 
-                    'ds_indices': [[] for _ in range(len(unique_slices))]
-                        })
-    extend_list = lambda lst: lst + [datasets.index(ds)]
-    for ds, z_range in zip(datasets, z_ranges):
-        df.loc[df.z.isin(z_range), 'ds_indices'] = df.loc[df.z.isin(z_range), 'ds_indices'].apply(extend_list)
-    df['group'] = df['ds_indices'].ne(df['ds_indices'].shift()).cumsum()
+    # Find all ranges over which there is overlap. Stacks that were already fused are dropped over
+    # the ranges where their fused version exists, so that running the detection again does not
+    # try to fuse a stack with the fused version of itself.
+    df = _occupancy_table(datasets, names, z_offsets)
 
     # Test overlap and create fused config in consequence
     fused_configs = []
@@ -257,12 +264,17 @@ def create_configs_fused_stacks(main_config_path,
                 G.add_edge(indices[i], indices[j])
 
         # Valid matches are chained in case there are more than 2 matches for a range
-        for cc in nx.connected_components(G):
+        # Connected components come out as unordered sets, so both the components and the datasets
+        # within them are sorted: the name of the fused stack is derived from that order and is used
+        # as a key for progress tracking, so it must be the same from one run to the next.
+        components = sorted([sorted(cc, key=lambda i: (int(z_offsets[i, 0]), _dataset_name(datasets[i])))
+                             for cc in nx.connected_components(G)])
+        for cc in components:
             config = {
-                'dataset_paths': [datasets[i].kvstore.path for i in cc], 
+                'dataset_paths': [datasets[i].kvstore.path for i in cc],
                 'z_offsets': [int(z_offsets[i,0]) for i in cc],
-                'zmin': int(z), 
+                'zmin': int(z),
                 'zmax': int(group.z.max()) + 1 # Exclusive max
-                } 
+                }
             fused_configs.append(config)
     return fused_configs
