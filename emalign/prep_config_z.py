@@ -18,8 +18,8 @@ import sys
 from glob import glob
 from typing import List, Optional
 
-from emalign.align_z.config import add_config_metadata, validate_config_directory, CONFIG_VERSION
-from emalign.align_z.utils import compute_alignment_path, determine_initial_offset, determine_initial_offset_ref, get_ordered_datasets
+from emalign.align_z.config import add_config_metadata, get_fuse_config_dir, load_fuse_plan, validate_config_directory, CONFIG_VERSION
+from emalign.align_z.utils import compute_alignment_path, compute_dataset_bounds, determine_initial_offset, determine_initial_offset_ref, get_ordered_datasets
 from emalign.io.store import get_store_attributes
 
 logging.basicConfig(level=logging.INFO)
@@ -74,7 +74,81 @@ def load_configs_from_files(config_paths, exclude):
             project_name, mongodb_config_filepath, output_path)
 
 
-def create_alignment_configs(datasets, z_offsets, output_configs_dir, config_z, reference_path, 
+def project_dir_from_config(config_path):
+    '''Find the project directory an XY main config file belongs to.
+
+    Main configs live at project_dir/config/xy_config/main_config.json.
+
+    Args:
+        config_path: Path to an XY main config file
+
+    Returns:
+        str: Path to the project directory
+    '''
+    return os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(config_path))))
+
+
+def check_fuse_step(config_paths, datasets):
+    '''Check that every group of overlapping stacks that was planned has actually been fused.
+
+    Fusing is optional, but a project where the fusing step was prepared and never executed still
+    has several stacks covering the same Z slices. Alignment would then either render them twice or
+    fail to find a root stack, so it is reported here instead. Datasets can come from several XY
+    configs, each belonging to its own project directory with its own fuse configuration.
+
+    Args:
+        config_paths: List of paths to XY main config files, possibly nested in groups
+        datasets: List of tensorstore datasets discovered for alignment
+
+    Raises:
+        RuntimeError: If a fused stack that was planned does not exist
+    '''
+    # Configs of consecutive stacks are passed as nested lists
+    flat_config_paths = []
+    for config_path in config_paths:
+        if isinstance(config_path, list):
+            flat_config_paths += config_path
+        else:
+            flat_config_paths.append(config_path)
+
+    dataset_names = [os.path.basename(os.path.abspath(d.kvstore.path)) for d in datasets]
+
+    missing = {}
+    for config_path in flat_config_paths:
+        project_dir = project_dir_from_config(config_path)
+        plan, group_configs = load_fuse_plan(project_dir)
+
+        if plan is None:
+            logging.info(f'No fusing step was prepared for {project_dir}')
+            continue
+
+        if plan.get('_config_version') != CONFIG_VERSION:
+            logging.warning(f'Fuse config files were generated with another version '
+                            f'({plan.get("_config_version")} instead of {CONFIG_VERSION})')
+
+        if not group_configs:
+            logging.info(f'No stacks were found to overlap in {project_dir}')
+            continue
+
+        logging.info(f'Fused stacks ({get_fuse_config_dir(project_dir)}):')
+        for config in group_configs:
+            destination_name = config['destination_name']
+            sources = ' + '.join(config['fused_from'])
+            logging.info(f'    z {config["zmin"]}-{config["zmax"]}: {sources} -> {destination_name}')
+            if destination_name not in dataset_names:
+                missing.setdefault(project_dir, []).append(destination_name)
+    logging.info('')
+
+    if missing:
+        message = ['Stacks overlapping on the same Z slices must be fused before Z alignment.',
+                   'The following stacks were planned for fusing but do not exist yet:']
+        for project_dir, names in missing.items():
+            message.append(f'    {project_dir}: {names}')
+            message.append(f'        Run: CUDA_VISIBLE_DEVICES=0 python emalign.scripts.fuse_stacks_xy -p {project_dir}')
+        raise RuntimeError('\n'.join(message))
+
+
+def create_alignment_configs(datasets, z_offsets, output_configs_dir, config_z, reference_path,
                              reference_offset, destination_path, project_name, mongodb_config_filepath,
                              yx_target_resolution, save_downsampled):
     '''Create alignment configuration files for all datasets.
@@ -110,22 +184,30 @@ def create_alignment_configs(datasets, z_offsets, output_configs_dir, config_z, 
         root_offset += pad_offset
         ref_bboxes = None
     else:
-        logging.info('Computing alignment path...')
-        root_stack, paths, reverse_order, ds_bounds = compute_alignment_path(
-            datasets, z_offsets, target_resolution=yx_target_resolution)
-        
+        # Each dataset aligns to the reference independently, matched by Z index, so no
+        # dataset is ever aligned to another one. Testing the transitions between datasets
+        # would only verify a relationship the alignment never uses, so only the Z bounds
+        # are computed, to avoid rendering a fused dataset and its sub-datasets twice.
+        logging.info('Computing dataset bounds...')
+        dataset_names, ds_bounds = compute_dataset_bounds(datasets, z_offsets)
+        root_stack = dataset_names[0]
+        paths = [dataset_names]  # Iteration order only, this is not an alignment chain
+        reverse_order = [False]
+
         # There is a reference dataset so we need to figure out the global offset relative to it
+        # Keep only the datasets that have been fused and ignore their sources
         logging.info('Computing padding...')
-        root_offset, ref_bboxes = determine_initial_offset_ref(datasets, z_offsets, reference_path, reference_offset, yx_target_resolution)
-        # Each dataset aligns to the reference independently — no chaining needed.
-        # dataset_names = [os.path.basename(os.path.abspath(ds.kvstore.path)) for ds in datasets]
-        # root_stack = dataset_names[0]
-        # paths = [dataset_names]
-        # reverse_order = [False]
-        # ds_bounds = {name: (0, ds.shape[0])
-        #              for name, ds in zip(dataset_names, datasets)}
+        keep_indices = [i for i, d in enumerate(datasets) if os.path.basename(os.path.abspath(d.kvstore.path)) in dataset_names]
+        datasets = [datasets[i] for i in keep_indices]
+        z_offsets = z_offsets[keep_indices]
+        root_offset, ref_bboxes = determine_initial_offset_ref(
+            datasets, 
+            z_offsets, 
+            reference_path, 
+            reference_offset, 
+            yx_target_resolution
+            )
         # root_offset is the (y, x) canvas origin; PAD_OFFSET is added as safety margin.
-        # Since datasets align to the reference (not to each other), origin is always 0.
         pad_offset = PAD_OFFSET.copy()
         root_offset += pad_offset
 
@@ -308,6 +390,10 @@ def prep_config_z(project_dir: str,
     for dataset, z in zip(datasets, z_offsets):
         yx_res = get_store_attributes(dataset)['resolution'][1:]
         logging.info(f'    {z[0]} (res: {yx_res}): {os.path.basename(os.path.abspath(dataset.kvstore.path))}')
+    logging.info('')
+
+    # Stacks overlapping on the same Z slices must have been fused beforehand
+    check_fuse_step(config_paths, datasets)
 
     if isinstance(yx_target_resolution, list):
         yx_target_resolution = np.min(yx_target_resolution, axis=0).tolist()
